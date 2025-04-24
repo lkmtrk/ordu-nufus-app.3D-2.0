@@ -11,8 +11,74 @@ from io import BytesIO
 
 @st.cache_data
 def load_parquet_data(path: str) -> pd.DataFrame:
-    df = pd.read_parquet(path)
-    df.rename(columns={"Latitude": "lat", "Longitude": "lon"}, inplace=True, errors="ignore")
+    df = pd.read_parquet(path)  # tüm sütunlar
+    df.rename(columns={"Latitude":"lat","Longitude":"lon"}, inplace=True, errors="ignore")
+    return df
+
+
+@st.cache_data
+def load_parquet_ilce(path: str, year: str) -> pd.DataFrame:
+    # Parquet'ten bu sütunları oku
+    cols = ["İLÇE", f"{year} YILI NÜFUSU", "Latitude", "Longitude"]
+    df = pd.read_parquet(path, columns=cols)
+    # Adları normalize et
+    df = df.rename(columns={
+        f"{year} YILI NÜFUSU": "NÜFUS",
+        "Latitude": "lat",
+        "Longitude": "lon"
+    })
+    # İşte burası önemli: ilçe düzeyinde toplam al
+    df_ilce = (
+        df
+        .groupby("İLÇE", as_index=False)
+        .agg({
+            "NÜFUS": "sum",
+            "lat":   "mean",
+            "lon":   "mean"
+        })
+    )
+    return df_ilce
+
+@st.cache_data
+def load_parquet_mahalle(path: str, year: str) -> pd.DataFrame:
+    cols = [
+        "İLÇE", 
+        "MAHALLE", 
+        "MAHALLE KODU (AKS)", 
+        f"{year} YILI NÜFUSU", 
+        "Latitude", 
+        "Longitude"
+    ]
+    df = pd.read_parquet(path, columns=cols)
+    df = df.rename(
+        columns={
+            f"{year} YILI NÜFUSU": "NÜFUS",
+            "Latitude": "lat",
+            "Longitude": "lon",
+        },
+        errors="ignore"
+    )
+    return df
+
+@st.cache_data
+def load_parquet_demo(path: str, pct_col: str) -> pd.DataFrame:
+    cols = [
+        "İLÇE", 
+        "MAHALLE", 
+        "MAHALLE KODU (AKS)", 
+        pct_col, 
+        "Latitude", 
+        "Longitude"
+    ]
+    df = pd.read_parquet(path, columns=cols)
+    df = df.rename(
+        columns={
+            pct_col: "PCT",
+            "Latitude": "lat",
+            "Longitude": "lon",
+        },
+        errors="ignore"
+    )
     return df
 
 @st.cache_data
@@ -28,62 +94,34 @@ def build_geo_lookup(geojson: dict, key_prop: str) -> dict:
         if key_prop in feat.get("properties", {})
     }
 
-@st.cache_data
-def calculate_ilce_data(df: pd.DataFrame, year: str) -> pd.DataFrame:
-    df_ilce = (
-        df.groupby("İLÇE")[f"{year} YILI NÜFUSU"].sum()
-          .reset_index()
-          .rename(columns={f"{year} YILI NÜFUSU": "NÜFUS"})
-    )
-    coords = df.groupby("İLÇE")[['lat','lon']].mean().reset_index()
-    return pd.merge(df_ilce, coords, on="İLÇE")
-
-@st.cache_data
-def calculate_mahalle_data(df: pd.DataFrame, year: str) -> pd.DataFrame:
-    df_loc = df.copy()
-    df_loc['NÜFUS'] = df_loc[f"{year} YILI NÜFUSU"]
-    return df_loc[['lat','lon','İLÇE','MAHALLE','MAHALLE KODU (AKS)','NÜFUS']]
-
-@st.cache_data
-def calculate_demo_data(df: pd.DataFrame, pct_col: str) -> pd.DataFrame:
-    demo = (
-        df[['lat','lon','İLÇE','MAHALLE','MAHALLE KODU (AKS)', pct_col]]
-          .rename(columns={pct_col: 'PCT'})
-          .dropna(subset=['PCT'])
-    )
-    return demo
 
 # -----------------------------
-# 1) SAYFA KONFİGÜRASYONU & VERİ YÜKLEME
+# 1) SAYFA KONFİGÜRASYONU & META YÜKLEME
 # -----------------------------
 
 st.set_page_config(page_title="Ordu Nüfus Haritası", layout="wide")
-st.markdown("""
-<style>
-  .deck-tooltip { background-color: magenta !important; color: white !important;
+st.markdown("""<style>
+  .deck-tooltip { background-color: magenta!important; color: white!important;
                   border-radius: 4px; padding: 4px; }
-</style>
-""", unsafe_allow_html=True)
+</style>""", unsafe_allow_html=True)
 st.markdown("## 📊 Ordu İli Nüfus Haritası (2007 - 2024)")
 
-# Veriyi yükle
-DF_PARQUET = "koordinatlı_nufus_verisi.parquet"
-df             = load_parquet_data(DF_PARQUET)
-ilce_geojson   = load_geojson("ILCELER.geojson")
-mahalle_geojson= load_geojson("MAHALLELER.geojson")
-
-# Lookup tabloları
-ilce_lookup    = build_geo_lookup(ilce_geojson,    "AD")
-mahalle_lookup = build_geo_lookup(mahalle_geojson, "KOD")
-
-# Harita dropdown ve merkez koordinatları
+# Tüm sütun isimleri ve lat/lon’u almak için
+df = load_parquet_data("koordinatlı_nufus_verisi.parquet")
 year_columns   = [c for c in df.columns if "YILI NÜFUSU" in c]
 dropdown_years = [c.split()[0] for c in year_columns]
-center_lat     = df['lat'].mean()
-center_lon     = df['lon'].mean()
+center_lat     = df["lat"].mean()
+center_lon     = df["lon"].mean()
+
+
+# GeoJSON + lookup (buraya ekledik)
+ilce_geojson    = load_geojson("ILCELER.geojson")
+ilce_lookup     = build_geo_lookup(ilce_geojson, "AD")
+mahalle_geojson = load_geojson("MAHALLELER.geojson")
+mahalle_lookup  = build_geo_lookup(mahalle_geojson, "KOD")
 
 # -------------------------------
-# 1. İLÇE BAZLI NÜFUS Harita ve Filtre
+# 2. İLÇE BAZLI NÜFUS Harita ve Filtre
 # -------------------------------
 
 st.markdown("### 🗺️ İlçe Bazlı Nüfus Haritası (Yıl & Nüfus Aralığı)")
@@ -97,8 +135,7 @@ secili_yil_ilce = st.selectbox(
 
 if secili_yil_ilce:
     # 1) Veri hazırlama
-    df_ilce_base = calculate_ilce_data(df, secili_yil_ilce)
-    df_ilce      = df_ilce_base.copy()
+    df_ilce = load_parquet_ilce("koordinatlı_nufus_verisi.parquet", secili_yil_ilce)
 
     # 2) Filtre UI
     st.session_state.setdefault("ilce_filter", False)
@@ -256,9 +293,9 @@ secili_yil_mahalle = st.selectbox(
 )
 
 if secili_yil_mahalle:
-    # 1) Önbellekli mahalle verisini al ve kopyasını oluştur
-    df_mahalle_base = calculate_mahalle_data(df, secili_yil_mahalle)
-    df_mahalle      = df_mahalle_base.copy()
+    # 1) Önbellekli mahalle verisini al 
+    df_mahalle = load_parquet_mahalle("koordinatlı_nufus_verisi.parquet", secili_yil_mahalle)
+
 
     # 2) Filtre UI ayarları
     st.session_state.setdefault("filter_active", False)
@@ -330,8 +367,6 @@ if secili_yil_mahalle:
         count_ilce = df_mahalle["İLÇE"].nunique()
         count_mah  = df_mahalle.shape[0]
         st.info(f"Kriterlere uygun {count_ilce} ilçede {count_mah} mahalle bulundu")
-    else:
-        df_mahalle = df_mahalle_base.copy()
 
 
     # 7) Formatlama & renk
@@ -463,8 +498,9 @@ if not selected_pct:
     st.stop()
 
 # 1) Cache’lenmiş temeli al
-df_demo_base = calculate_demo_data(df, selected_pct)
-df_demo      = df_demo_base.copy()
+# 1) Cache’lenmiş demografi verisi alın
+df_demo = load_parquet_demo("koordinatlı_nufus_verisi.parquet", selected_pct)
+
 
 # 2) Filtre UI
 st.session_state.setdefault("dem_filter", False)
