@@ -503,7 +503,6 @@ if not selected_pct:
     st.error("Lütfen listeden bir yaş grubu seçin.")
     st.stop()
 
-# 1) Cache’lenmiş temeli al
 # 1) Cache’lenmiş demografi verisi alın
 df_demo = load_parquet_demo("koordinatlı_nufus_verisi.parquet", selected_pct)
 
@@ -547,9 +546,9 @@ if st.session_state.dem_filter and st.session_state.dem_range:
     cnt_m = df_demo.shape[0]
     st.info(f"Kriterlere uygun {cnt_i} ilçede {cnt_m} mahalle bulundu")
 
-
-# 4) Yüzde formatlama — vektörize
-df_demo["PCT_FMT"] = (df_demo["PCT"].mul(100).round(1).astype(str).radd("%"))
+# 4) Yüzde formatlama (tutarlı iki ondalık için .map)
+df_demo["pct_numeric"]   = df_demo["PCT"]
+df_demo["Yüzde Aralığı"] = df_demo["pct_numeric"].map("{:.2f} %".format)
 
 # Demografi için kategorilere ayırma ve renk atama
 bins_d = [-float("inf"), 5, 10, 15, 20, 25, 30, float("inf")]
@@ -563,7 +562,7 @@ colors_d = [
     [228,26,28,180],
 ]
 # PCT sütunu zaten 0–1 aralığında; yüzdeye çevirmek için *100
-df_demo["cat"]   = pd.cut(df_demo["PCT"] * 100, bins=bins_d, labels=False, right=True)
+df_demo["cat"]   = pd.cut(df_demo["PCT"], bins=bins_d, labels=False, right=True)
 df_demo["color"] = df_demo["cat"].map(dict(enumerate(colors_d)))
 df_demo.drop(columns=["cat"], inplace=True)
 
@@ -606,7 +605,80 @@ st.pydeck_chart(pdk.Deck(
     map_style  = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
     initial_view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=8, pitch=40),
     layers     = layers,
-    tooltip    = {"html": "<b>{MAHALLE}</b><br/>İlçe: {İLÇE}<br/>"
-                     f"{selected_label} Yüzde: "+"{PCT_FMT}"}
+    tooltip={
+      "html": (
+         "<b>{MAHALLE}</b><br/>"
+         "İlçe: {İLÇE}<br/>"
+         f"{selected_label} Yüzde: "+"{Yüzde Aralığı}"
+      )
+    }
 ))
+
+# 1) Ham veri indir
+col_ham, col_piv, _ = st.columns([1,1,8])
+
+# 1) Ham veri indir
+with col_ham:
+    out_ham = BytesIO()
+    # Ham veri: koordinatları at, pct_numeric’i iki ondalığa yuvarla ve sayısal bırak
+    df_ham = df_demo[["İLÇE","MAHALLE","pct_numeric"]].copy()
+    df_ham.rename(columns={"pct_numeric": "Yüzde Aralığı"}, inplace=True)
+    df_ham["Yüzde Aralığı"] = df_ham["Yüzde Aralığı"].round(2)
+
+    with pd.ExcelWriter(out_ham, engine="xlsxwriter") as writer:
+        sheet = "Ham Demografi Verisi"
+        wb = writer.book
+        ws = wb.add_worksheet(sheet)
+        writer.sheets[sheet] = ws
+        # 1. satıra kullanıcı girdilerini yaz
+        ws.write(0, 0, "Seçili Yaş Grubu:")
+        ws.write(0, 1, selected_label)
+        ws.write(0, 2, "Filtre Aralığı (%):")
+        ws.write(0, 3, st.session_state.dem_range or "—")
+        # 3. satırdan itibaren gerçek veri
+        df_ham.to_excel(writer, sheet_name=sheet, index=False, startrow=1)
+
+    st.download_button(
+        "Ham Veriyi İndir",
+        data=out_ham.getvalue(),
+        file_name=f"demografi_ham_{selected_label}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        type="secondary"
+    )
+
+# 2) Pivot veri indir
+with col_piv:
+    out_piv = BytesIO()
+    # Pivot: ilçede mahallelerin ortalama yüzdesini sayısal tut
+    piv = (
+        df_demo
+        .groupby("İLÇE", as_index=False)
+        .agg({"pct_numeric": "mean"})
+        .rename(columns={"pct_numeric": "Yüzde Aralığı"})
+    )
+    piv["Yüzde Aralığı"] = piv["Yüzde Aralığı"].round(2)
+    toplam = piv["Yüzde Aralığı"].mean().round(2)
+    piv = pd.concat([piv, pd.DataFrame([{"İLÇE":"Ortalama Yüzde", "Yüzde Aralığı":toplam}])],
+                    ignore_index=True)
+
+    with pd.ExcelWriter(out_piv, engine="xlsxwriter") as writer:
+        sheet = "Pivot Demografi"
+        wb = writer.book
+        ws = wb.add_worksheet(sheet)
+        writer.sheets[sheet] = ws
+        ws.write(0, 0, "Seçili Yaş Grubu:")
+        ws.write(0, 1, selected_label)
+        ws.write(0, 2, "Filtre Aralığı (%):")
+        ws.write(0, 3, st.session_state.dem_range or "—")
+        piv.to_excel(writer, sheet_name=sheet, index=False, startrow=1)
+
+    st.download_button(
+        "Pivot Tabloyu İndir",
+        data=out_piv.getvalue(),
+        file_name=f"demografi_pivot_{selected_label}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+        use_container_width=True,
+        type="primary"
+    )
 
