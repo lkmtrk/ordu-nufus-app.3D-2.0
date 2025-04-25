@@ -175,8 +175,9 @@ if secili_yil_ilce:
         st.markdown(f"**Seçilen İlçe Aralığı:** {lo} – {hi}")
         st.info(f"Kriterlere uygun {df_ilce.shape[0]} ilçe bulundu")
 
-    # 4) Formatlama & renk
-    df_ilce["NÜFUS_FMT"] = df_ilce["NÜFUS"].apply(lambda v: f"{int(v):,}".replace(",", "."))
+    # 4) Formatlama & renk — vektörize
+    df_ilce["NÜFUS_FMT"] = (df_ilce["NÜFUS"].astype(int).map("{:,.0f}".format).str.replace(",", "."))
+
     # İlçe için kategorilere ayırma ve renk atama
     bins_i = [-float("inf"), 10000, 13000, 20000, 25000, 100000, 200000, float("inf")]
     colors_i = [
@@ -369,8 +370,9 @@ if secili_yil_mahalle:
         st.info(f"Kriterlere uygun {count_ilce} ilçede {count_mah} mahalle bulundu")
 
 
-    # 7) Formatlama & renk
-    df_mahalle['NÜFUS_FMT'] = df_mahalle['NÜFUS'].apply(lambda v: f"{int(v):,}".replace(',', '.'))
+    # 7) Formatlama & renk — vektörize
+    df_mahalle["NÜFUS_FMT"] = (df_mahalle["NÜFUS"].astype(int).map("{:,.0f}".format).str.replace(",", "."))
+
     # Mahalle için kategorilere ayırma ve renk atama
     bins_m = [-float("inf"), 5000, 10000, 15000, 20000, 25000, 30000, float("inf")]
     colors_m = [
@@ -387,14 +389,18 @@ if secili_yil_mahalle:
     df_mahalle.drop(columns=["cat"], inplace=True)
 
 
-    # 8) ColumnLayer
-    layer = pdk.Layer(
-        "ColumnLayer", data=df_mahalle,
-        get_position="[lon, lat]", get_elevation="NÜFUS",
-        elevation_scale=0.3, radius=150,
-        get_fill_color="color", pickable=True,
-        auto_highlight=True, extruded=True
+    # 8) Kümeli ScatterplotLayer (Mahalle)
+    clustered_mahalle_layer = pdk.Layer(
+        "ScatterplotLayer",
+        data=df_mahalle,
+        get_position="[lon, lat]",
+        get_fill_color="color",
+        get_radius=150,
+        pickable=True,
+        cluster=True,        
+        cluster_radius=50,
     )
+
 
     # 9) Sınır checkbox & GeoJSON filtresi
     show = st.checkbox("Mahalle Sınırlarını Göster", value=True, key="show_mahalle_borders_only")
@@ -414,7 +420,7 @@ if secili_yil_mahalle:
     st.pydeck_chart(pdk.Deck(
         map_style="https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
         initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=8, pitch=40),
-        layers=[layer] + ([border] if show else []),
+        layers=[clustered_mahalle_layer] + ([border] if show else []),
         tooltip={"html": "<b>{MAHALLE}</b><br/>İlçe: {İLÇE}<br/>Nüfus ({YIL}): {NÜFUS_FMT}".replace("{YIL}", str(secili_yil_mahalle))}
     ))
 
@@ -542,8 +548,9 @@ if st.session_state.dem_filter and st.session_state.dem_range:
     st.info(f"Kriterlere uygun {cnt_i} ilçede {cnt_m} mahalle bulundu")
 
 
-# 4) Renk ve format
-df_demo["PCT_FMT"] = df_demo["PCT"].apply(lambda v: f"{v:.1f}%")
+# 4) Yüzde formatlama — vektörize
+df_demo["PCT_FMT"] = (df_demo["PCT"].mul(100).round(1).astype(str).radd("%"))
+
 # Demografi için kategorilere ayırma ve renk atama
 bins_d = [-float("inf"), 5, 10, 15, 20, 25, 30, float("inf")]
 colors_d = [
@@ -561,14 +568,18 @@ df_demo["color"] = df_demo["cat"].map(dict(enumerate(colors_d)))
 df_demo.drop(columns=["cat"], inplace=True)
 
 
-# 5) ColumnLayer
-demo_layer = pdk.Layer(
-    "ColumnLayer", data=df_demo,
-    get_position="[lon, lat]", get_elevation="PCT",
-    elevation_scale=10, radius=150,
-    get_fill_color="color", pickable=True,
-    auto_highlight=True, extruded=True
+# 5) Kümeli ScatterplotLayer (Demografi)
+clustered_demo_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=df_demo,
+    get_position="[lon, lat]",
+    get_fill_color="color",
+    get_radius=150,
+    pickable=True,
+    cluster=True,     
+    cluster_radius=50,
 )
+
 
 # 6) Sınır katmanı (lookup ile)
 show = st.checkbox("Mahalle Sınırlarını Göster", value=True, key="show_demo_borders")
@@ -576,16 +587,21 @@ allowed = set(df_demo["MAHALLE KODU (AKS)"].astype(int))
 features = [mahalle_lookup[k] for k in allowed if k in mahalle_lookup]
 demo_geo = {"type":"FeatureCollection","features":features}
 
-layers = [demo_layer]
+# 7) Katman listesi & render
+layers = [clustered_demo_layer]
 if show:
     geo_to_use = demo_geo if st.session_state.dem_filter else mahalle_geojson
-    layers.append(pdk.Layer(
-        "GeoJsonLayer", geo_to_use,
-        stroked=True, filled=False,
-        get_line_color=[3,32,252,180], line_width_min_pixels=1
-    ))
+    border_layer = pdk.Layer(
+        "GeoJsonLayer",
+        geo_to_use,
+        stroked=True,
+        filled=False,
+        get_line_color=[3,32,252,180],
+        line_width_min_pixels=1
+    )
+    layers.append(border_layer)
 
-# 7) Render
+
 st.pydeck_chart(pdk.Deck(
     map_style  = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
     initial_view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=8, pitch=40),
