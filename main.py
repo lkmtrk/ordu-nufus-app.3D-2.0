@@ -775,358 +775,385 @@ if secili_yil_mahalle:
 
 
 # -------------------------------
-# 3. DEMOGRAFİ HARİTASI (% Yaş Dağılımı) (Pydeck) VE YANINDA DROPDOWN GRAFİK
-# Kullanıcının son isteği: Bu Pydeck demografi haritası ve aşağıdaki dropdown grafik yan yana
+# 3. DEMOGRAFİ HARİTASI (% Yaş Dağılımı) (Pydeck)
 # -------------------------------
 
 st.markdown("### 👥 Demografi Haritası (% Yaş Dağılımı)") # Bölüm başlığı
 
-demography_map_col, dropdown_graph_col = st.columns([4, 1])
+# --- Demografi Haritası Kodları (Pydeck) ---
 
-# --- Demografi Haritası Sütunu (Pydeck Demografi Haritası) ---
-with demography_map_col:
-    # use_container_width=True kaldırıldı
-    selected_label_map = st.selectbox("Harita Rengi için Yaş Grubu Yüzdesi Seçiniz", pct_labels, key="demography_pct_map")
-    selected_pct_original = label_to_col.get(selected_label_map)
-    if not selected_pct_original:
-        st.error("Lütfen listeden bir yaş grubu seçin.")
+# use_container_width=True kaldırıldı
+selected_label_map = st.selectbox("Harita Rengi için Yaş Grubu Yüzdesi Seçiniz", pct_labels, key="demography_pct_map")
+selected_pct_original = label_to_col.get(selected_label_map)
+if not selected_pct_original:
+    st.error("Lütfen listeden bir yaş grubu seçin.")
 
-    # load_parquet_demo fonksiyonu artık all_pct_columns değil, tek bir sütun adı alıyor.
-    if selected_pct_original: # Sütun seçildiyse veriyi yükle
-         df_demo = load_parquet_demo("koordinatlı_nufus_verisi.parquet", selected_pct_original)
-    else:
-         df_demo = pd.DataFrame() # Sütun seçilmediyse boş DataFrame
+# 1) Cache’lenmiş demografi verisi alın (Tek yüzde sütunu yüklüyor)
+if selected_pct_original: # Sütun seçildiyse veriyi yükle
+     df_demo = load_parquet_demo("koordinatlı_nufus_verisi.parquet", selected_pct_original)
+else:
+     df_demo = pd.DataFrame() # Sütun seçilmediyse boş DataFrame
 
-    # 2) Filtre UI
-    st.session_state.setdefault("dem_filter", False)
-    st.session_state.setdefault("dem_range", "")
 
-    def fmt_demo():
-        txt = st.session_state.dem_range.strip()
-        parts = re.split(r"[-–—]", txt)
-        if len(parts) == 2:
-            try:
-                lo, hi = [float(p) for p in parts]
-                def fmt_num(x):
-                    return str(int(x)) if x == int(x) else str(x)
-                st.session_state.dem_range = f"{fmt_num(lo)}-{fmt_num(hi)}"
-            except:
-                pass
+# 2) Filtre UI
+st.session_state.setdefault("dem_filter", False)
+st.session_state.setdefault("dem_range", "")
 
-    def clear_demo():
-        st.session_state.dem_range = ""
-        st.session_state.dem_filter = False
-
-    st.text_input("Yüzde Aralığı Seç (örn: 5-7)", key="dem_range", on_change=fmt_demo)
-    c1,c2,_ = st.columns([1,1,8])
-    with c1: btn = st.button("Gir", type="primary", key="demogr_gir", use_container_width=True)
-    with c2: st.button("Temizle", type="secondary", key="demogr_temizle", on_click=clear_demo, use_container_width=True)
-
-    df_demo_filtered = df_demo.copy()
-
-    if btn:
-        st.session_state.dem_filter = True
-
-    # 3) Filtre aktiveyse uygula
-    if st.session_state.dem_filter and st.session_state.dem_range and not df_demo_filtered.empty:
+def fmt_demo():
+    txt = st.session_state.dem_range.strip()
+    parts = re.split(r"[-–—]", txt)
+    if len(parts) == 2:
         try:
-            lo, hi = map(float, st.session_state.dem_range.split("-"))
-            df_demo_filtered = df_demo_filtered[df_demo_filtered["PCT"].between(lo, hi)].copy()
-            st.markdown(f"**Seçilen Yüzde:** {lo:g} – {hi:g}")
-            cnt_i = df_demo_filtered["İLÇE"].nunique()
-            cnt_m = df_demo_filtered.shape[0]
-            st.info(f"Kriterlere uygun {cnt_i} ilçede {cnt_m} mahalle bulundu")
-        except ValueError:
-            st.error("Geçersiz yüzde aralığı formatı. Lütfen 'örn: 5-7' gibi girin.")
-    elif st.session_state.dem_filter and st.session_state.dem_range and df_demo_filtered.empty:
-         st.warning("Filtre uygulanacak veri bulunamadı.")
+            lo, hi = [float(p) for p in parts]
+            def fmt_num(x):
+                return str(int(x)) if x == int(x) else str(x)
+            st.session_state.dem_range = f"{fmt_num(lo)}-{fmt_num(hi)}"
+        except:
+            pass
 
-    # 4) Yüzde formatlama (tutarlı iki ondalık için .map)
-    if not df_demo_filtered.empty:
-         df_demo_filtered["pct_numeric"]  = df_demo_filtered["PCT"]
-         df_demo_filtered["Yüzde Aralığı"] = df_demo_filtered["pct_numeric"].map("{:.2f} %".format)
+def clear_demo():
+    st.session_state.dem_range = ""
+    st.session_state.dem_filter = False
 
-         # Demografi için kategorilere ayırma ve renk atama
-         # bins_d listesi 8 elemanlı olmalı (7 aralık için 8 sınır)
-         bins_d = [-float("inf"), 5, 10, 15, 20, 25, 30, 35, float("inf")] # Bir sınır daha eklendi
-         # colors_d listesi 8 renkli olmalı (8 aralık için 8 renk)
-         colors_d = [
-             [166,86,40,180], # Koyu Kahve
-             [152,78,163,180], # Mor
-             [77,175,74,180],  # Yeşil
-             [55,126,184,180], # Mavi
-             [247,129,191,180],# Pembe (Yeni renk)
-             [255,127,0,180],  # Turuncu
-             [255,255,51,180], # Sarı
-             [228,26,28,180],  # Kırmızı (En yüksek aralık)
-         ] # Renk sayısı bins sayısı - 1 kadar olmalı
-         df_demo_filtered["cat"]  = pd.cut(df_demo_filtered["PCT"], bins=bins_d, labels=False, right=True)
-         df_demo_filtered["color"] = df_demo_filtered["cat"].map(dict(enumerate(colors_d)))
-         df_demo_filtered.drop(columns=["cat"], inplace=True)
+st.text_input("Yüzde Aralığı Seç (örn: 5-7)", key="dem_range", on_change=fmt_demo)
+c1,c2,_ = st.columns([1,1,8])
+with c1: btn = st.button("Gir", type="primary", key="demogr_gir", use_container_width=True)
+with c2: st.button("Temizle", type="secondary", key="demogr_temizle", on_click=clear_demo, use_container_width=True)
 
-         # 5) Kümeli ScatterplotLayer (Demografi)
-         clustered_demo_layer = pdk.Layer(
-             "ScatterplotLayer",
-             data=df_demo_filtered, # Filtrelenmiş veriyi kullan
-             get_position="[lon, lat]",
-             get_fill_color="color",
-             get_radius=150,
-             pickable=True, # Etkileşim için pickable True
-             cluster=True,
-             cluster_radius=50,
-         )
+df_demo_filtered = df_demo.copy()
 
-         # show = st.checkbox("Mahalle Sınırlarını Göster", value=True, key="show_demo_borders") # demography_map_col içinde checkbox için ayrı key kullanıldı
-         show_map_borders = st.checkbox("Mahalle Sınırlarını Göster", value=True, key="show_demo_borders_map")
+if btn:
+    st.session_state.dem_filter = True
 
-         layers = [clustered_demo_layer] # Başlangıçta sadece nokta katmanı
+# 3) Filtre aktiveyse uygula
+if st.session_state.dem_filter and st.session_state.dem_range and not df_demo_filtered.empty:
+    try:
+        lo, hi = map(float, st.session_state.dem_range.split("-"))
+        df_demo_filtered = df_demo_filtered[df_demo_filtered["PCT"].between(lo, hi)].copy()
+        st.markdown(f"**Seçilen Yüzde:** {lo:g} – {hi:g}")
+        cnt_i = df_demo_filtered["İLÇE"].nunique()
+        cnt_m = df_demo_filtered.shape[0]
+        st.info(f"Kriterlere uygun {cnt_i} ilçede {cnt_m} mahalle bulundu")
+    except ValueError:
+        st.error("Geçersiz yüzde aralığı formatı. Lütfen 'örn: 5-7' gibi girin.")
+elif st.session_state.dem_filter and st.session_state.dem_range and df_demo_filtered.empty:
+     st.warning("Filtre uygulanacak veri bulunamadı.")
 
-         if show_map_borders:
-             allowed = set(df_demo_filtered["MAHALLE KODU (AKS)"].astype(int))
-             features = [mahalle_lookup[k] for k in allowed if k in mahalle_lookup]
-             demo_geo = {"type":"FeatureCollection","features":features}
+# 4) Yüzde formatlama (tutarlı iki ondalık için .map)
+if not df_demo_filtered.empty: # <-- Demografi Haritası ve Excel İndirme Kodları bu blok içine taşındı
+     df_demo_filtered["pct_numeric"]  = df_demo_filtered["PCT"]
+     df_demo_filtered["Yüzde Aralığı"] = df_demo_filtered["pct_numeric"].map("{:.2f} %".format)
 
-             # Filtre aktifse filtrelenmiş geojson kullan, değilse tam geojson kullan
-             geo_to_use = demo_geo if st.session_state.dem_filter else mahalle_geojson
-             # GeoJSON geçerli ve feature içeriyor mu kontrolü
-             if geo_to_use and geo_to_use.get('features'):
-                  border_layer = pdk.Layer(
-                      "GeoJsonLayer",
-                      geo_to_use,
-                      stroked=True,
-                      filled=False,
-                      get_line_color=[3,32,252,180],
-                      line_width_min_pixels=1
-                  )
-                  layers.append(border_layer) # Sınır katmanını ekle
-             elif st.session_state.dem_filter and not features:
-                  st.warning("Filtre kriterlerinize uyan mahalle bulunamadığı için mahalle sınırları gösterilemiyor.")
-             elif not mahalle_geojson:
-                  st.warning("Mahalle sınırları GeoJSON verisi yüklenemedi.")
+     # Demografi için kategorilere ayırma ve renk atama
+     # bins_d listesi 8 elemanlı olmalı (7 aralık için 8 sınır)
+     bins_d = [-float("inf"), 5, 10, 15, 20, 25, 30, 35, float("inf")] # Bir sınır daha eklendi
+     # colors_d listesi 8 renkli olmalı (8 aralık için 8 renk)
+     colors_d = [
+         [166,86,40,180], # Koyu Kahve
+         [152,78,163,180], # Mor
+         [77,175,74,180],  # Yeşil
+         [55,126,184,180], # Mavi
+         [247,129,191,180],# Pembe (Yeni renk)
+         [255,127,0,180],  # Turuncu
+         [255,255,51,180], # Sarı
+         [228,26,28,180],  # Kırmızı (En yüksek aralık)
+     ] # Renk sayısı bins sayısı - 1 kadar olmalı
+     df_demo_filtered["cat"]  = pd.cut(df_demo_filtered["PCT"], bins=bins_d, labels=False, right=True)
+     df_demo_filtered["color"] = df_demo_filtered["cat"].map(dict(enumerate(colors_d)))
+     df_demo_filtered.drop(columns=["cat"], inplace=True)
+
+     # 5) Kümeli ScatterplotLayer (Demografi)
+     clustered_demo_layer = pdk.Layer(
+         "ScatterplotLayer",
+         data=df_demo_filtered, # Filtrelenmiş veriyi kullan
+         get_position="[lon, lat]",
+         get_fill_color="color",
+         get_radius=150,
+         pickable=True, # Etkileşim için pickable True
+         cluster=True,
+         cluster_radius=50,
+     )
+
+     # 6) Sınır katmanı (lookup ile)
+     show_map_borders = st.checkbox("Mahalle Sınırlarını Göster", value=True, key="show_demo_borders_map")
+
+     layers = [clustered_demo_layer] # Başlangıçta sadece nokta katmanı
+
+     if show_map_borders:
+         allowed = set(df_demo_filtered["MAHALLE KODU (AKS)"].astype(int))
+         features = [mahalle_lookup[k] for k in allowed if k in mahalle_lookup]
+         demo_geo = {"type":"FeatureCollection","features":features}
+
+         # Filtre aktifse filtrelenmiş geojson kullan, değilse tam geojson kullan
+         geo_to_use = demo_geo if st.session_state.dem_filter else mahalle_geojson
+         # GeoJSON geçerli ve feature içeriyor mu kontrolü
+         if geo_to_use and geo_to_use.get('features'):
+              border_layer = pdk.Layer(
+                  "GeoJsonLayer",
+                  geo_to_use,
+                  stroked=True,
+                  filled=False,
+                  get_line_color=[3,32,252,180],
+                  line_width_min_pixels=1
+              )
+              layers.append(border_layer) # Sınır katmanını ekle
+         elif st.session_state.dem_filter and not features:
+              st.warning("Filtre kriterlerinize uyan mahalle bulunamadığı için mahalle sınırları gösterilemiyor.")
+         elif not mahalle_geojson:
+              st.warning("Mahalle sınırları GeoJSON verisi yüklenemedi.")
 
 
-         st.pydeck_chart(pdk.Deck(
-             map_style  = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
-             initial_view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=8, pitch=40),
-             layers     = layers,
-             tooltip={
-               "html": (
-                 "<b>{MAHALLE}</b><br/>"
-                 "İlçe: {İLÇE}<br/>"
-                 f"{selected_label_map} Yüzde: "+"{Yüzde Aralığı}" # Araç ipucunda yüzdeyi göster
-               )
-             }
-         ))
+     # 9) Harita çizimi
+     st.pydeck_chart(pdk.Deck(
+          map_style  = "https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
+          initial_view_state = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=8, pitch=40),
+          layers     = layers,
+          tooltip={
+            "html": (
+              "<b>{MAHALLE}</b><br/>"
+              "İlçe: {İLÇE}<br/>"
+              f"{selected_label_map} Yüzde: "+"{Yüzde Aralığı}" # Araç ipucunda yüzdeyi göster
+            )
+          }
+     ))
 
-    else:
-         st.warning("Harita için veri bulunamadı (Demografi).")
+     # --- İndirme Butonları (Demografi Haritası - Pydeck - Filtresine Ait) ---
+     st.markdown("---") # Ayırıcı çizgi
 
-# --- Dropdown Grafik Sütunu ---
-with dropdown_graph_col:
-    st.markdown("#### Yaş Dağılım Grafiği") # Başlık
+     col_ham_dem, col_piv_dem, _ = st.columns([1,1,8])
 
-    # Bu nedenle sadece bir değer alacak şekilde çağrıyı düzeltelim
-    demo_df_for_dropdown_raw = load_all_age_demographics() # <-- Çağrı düzeltildi, tek değer bekleniyor
+     # 1) Ham veri indir (Demografi haritası filtresine göre)
+     with col_ham_dem:
+         out_ham = BytesIO()
+         # df_demo_filtered zaten yukarıdaki if bloğu içinde tanımlı ve boş değilse burası çalışır.
+         df_ham = df_demo_filtered[["İLÇE","MAHALLE","pct_numeric"]].copy()
+         df_ham.rename(columns={"pct_numeric": "Yüzde Aralığı"}, inplace=True)
+         df_ham["Yüzde Aralığı"] = df_ham["Yüzde Aralığı"].round(2)
 
-    # Koşulda, global olarak tanımlı olan pct_columns değişkenini kullanalım
-    if not demo_df_for_dropdown_raw.empty and 'pct_columns' in globals() and pct_columns: # <-- Koşul düzeltildi, global pct_columns kullanılıyor
+         if not df_ham.empty: # df_ham boş değilse yazma işlemini yap
+             with pd.ExcelWriter(out_ham, engine="xlsxwriter") as writer:
+                 sheet = "Ham Demografi Verisi"
+                 wb = writer.book
+                 ws = wb.add_worksheet(sheet)
+                 writer.sheets[sheet] = ws
+                 # 1. satıra kullanıcı girdilerini yaz
+                 ws.write(0, 0, "Seçili Yaş Grubu:")
+                 ws.write(0, 1, selected_label_map) # selected_label yerine selected_label_map kullanıldı
+                 ws.write(0, 2, "Filtre Aralığı (%):")
+                 ws.write(0, 3, st.session_state.dem_range or "—")
+                 # 3. satırdan itibaren gerçek veri
+                 df_ham.to_excel(writer, sheet_name=sheet, index=False, startrow=1)
 
-        # İlçe Seçim Kutusu (bu sütun içinde)
-        ilce_list_dropdown = sorted(demo_df_for_dropdown_raw["İLÇE"].unique().tolist())
-        # use_container_width=True kaldırıldı
-        selected_ilce_dropdown = st.selectbox("İlçe Seçin:", ilce_list_dropdown, key="graph_ilce_selector_dropdown")
+             st.download_button(
+                 "Ham Veriyi İndir",
+                 data=out_ham.getvalue(),
+                 file_name=f"demografi_ham_{selected_label_map}.xlsx", # Dosya adı selected_label_map kullanılarak güncellendi
+                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 use_container_width=True,
+                 type="secondary"
+             )
+         else:
+              st.warning("İndirilecek ham demografi verisi bulunamadı (Filtrelemeye uygun veri yok).")
 
-        # Mahalle Seçim Kutusu (bu sütun içinde)
-        if selected_ilce_dropdown:
-            mahalle_options_dropdown = demo_df_for_dropdown_raw[demo_df_for_dropdown_raw["İLÇE"] == selected_ilce_dropdown]["MAHALLE"].unique().tolist()
-            # use_container_width=True kaldırıldı
-            selected_mahalle_dropdown = st.selectbox("Mahalle Seçin:", mahalle_options_dropdown, key="graph_mahalle_selector_dropdown")
-        else:
-            selected_mahalle_dropdown = None # İlçe seçilmediyse mahalle seçeneği yok
 
-        # Eğer mahalle seçildiyse devam et ve grafiği çiz
-        if selected_mahalle_dropdown:
-            mahalle_data_row_dropdown = demo_df_for_dropdown_raw[ # Raw datayı kullan
-                (demo_df_for_dropdown_raw["İLÇE"] == selected_ilce_dropdown) &
-                (demo_df_for_dropdown_raw["MAHALLE"] == selected_mahalle_dropdown)
-            ]
+     # 2) Pivot veri indir (Demografi haritası filtresine göre)
+     with col_piv_dem: # Değişken adı güncellendi
+         out_piv = BytesIO()
 
-            if not mahalle_data_row_dropdown.empty:
-                mahalle_data_dropdown = mahalle_data_row_dropdown.iloc[0]
+         # Pivot: ilçede mahallelerin ortalama yüzdesini sayısal tut
+         if not df_demo_filtered.empty and "pct_numeric" in df_demo_filtered.columns and "İLÇE" in df_demo_filtered.columns:
+             piv_dem = (
+                 df_demo_filtered
+                 .groupby("İLÇE", as_index=False)
+                 .agg({"pct_numeric": "mean"})
+                 .rename(columns={"pct_numeric": selected_label_map + " Yüzde Ortalama"}) # Sütun adı güncellendi
+             )
+             if not piv_dem.empty:
+                 # Sadece yüzde sütununu yuvarla (artık sadece bir tane var)
+                 yuzde_col_name = selected_label_map + " Yüzde Ortalama"
+                 if yuzde_col_name in piv_dem.columns:
+                      piv_dem[yuzde_col_name] = piv_dem[yuzde_col_name].round(2)
+                      # Genel toplamı hesapla (sadece ortalama sütunu için)
+                      numeric_cols_in_piv = piv_dem.select_dtypes(include=np.number).columns.tolist()
+                      if numeric_cols_in_piv:
+                          toplam_row_data = {"İLÇE":"Genel Ortalama"}
+                          for num_col in numeric_cols_in_piv:
+                              toplam_row_data[num_col] = piv_dem[num_col].mean().round(2)
+                          piv_dem = pd.concat([piv_dem, pd.DataFrame([toplam_row_data])], ignore_index=True)
+                      else:
+                          st.warning("Pivot tablo genel ortalaması için sayısal sütun bulunamadı.")
+             else:
+                  st.warning("Pivot tablo oluşturmak için uygun demografi verisi bulunamadı.")
+
+         else: # df_demo_filtered boş veya gerekli sütunlar yok
+             st.warning("Pivot tablo oluşturmak için uygun demografi verisi bulunamadı.")
+             piv_dem = pd.DataFrame() # Eğer veri yoksa boş DataFrame tanımla
+
+
+         # piv_dem artık bu noktada her zaman tanımlı (veri içerse de içermese de)
+         if not piv_dem.empty:
+             with pd.ExcelWriter(out_piv, engine="xlsxwriter") as writer:
+                 sheet = "Pivot Demografi"
+                 wb = writer.book
+                 ws = wb.add_worksheet(sheet)
+                 writer.sheets[sheet] = ws
+                 ws.write(0, 0, "Harita Rengi Yaş Grubu:")
+                 ws.write(0, 1, selected_label_map)
+                 ws.write(0, 2, "Filtre Aralığı (%):")
+                 ws.write(0, 3, st.session_state.dem_range or "—")
+                 piv_dem.to_excel(writer, sheet_name=sheet, index=False, startrow=1)
+
+             st.download_button(
+                 "Pivot Tabloyu İndir",
+                 data=out_piv.getvalue(),
+                 file_name=f"demografi_pivot_{selected_label_map}.xlsx", # Dosya adı selected_label_map kullanılarak güncellendi
+                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 use_container_width=True,
+                 type="primary"
+             )
+         else:
+              st.warning("İndirilecek pivot demografi verisi bulunamadı.")
+
+else: # df_demo_filtered is empty (from initial load or filter result)
+     st.warning("Harita için veri bulunamadı (Demografi).")
+
+
+# --- Yaş Dağılım Grafikleri (Çoklu Mahalle Seçimi ve Yan Yana Gösterim) ---
+st.markdown("---") # Ayırıcı çizgi
+st.markdown("### 📊 Seçilen Mahallelerin Yaş Dağılım Grafikleri")
+
+# Yaş aralıklarını küçükten büyüğe sıralamak için etiketlerin istediğimiz sırasını belirleyelim (Grafikler için)
+age_group_order = ["0-5", "6-13", "14-17", "18-34", "35-64", "65+"]
+
+# Bu nedenle sadece bir değer alacak şekilde çağrıyı düzeltelim
+demo_df_for_dropdown_raw = load_all_age_demographics() # Çağrı düzeltildi, tek değer bekleniyor
+
+# Koşulda, global olarak tanımlı olan pct_columns değişkenini kullanalım
+if not demo_df_for_dropdown_raw.empty and 'pct_columns' in globals() and pct_columns:
+
+    # Get unique list of İlçes for the first selectbox
+    all_ilces_list = sorted(demo_df_for_dropdown_raw["İLÇE"].unique().tolist())
+
+    # İlçe ve Mahalle seçim alanları için aynı satırda iki sütun oluştur
+    ilce_select_col, mahalle_select_col = st.columns([1, 1]) # Sütun genişliklerini ayarlayabilirsiniz
+
+    with ilce_select_col:
+        # Çoklu İlçe Seçimi
+        selected_ilces_graph = st.multiselect(
+            "Grafik için İlçe Seçin:",
+            all_ilces_list,
+            key="graph_ilce_multiselect",
+            placeholder="Lütfen İlçe Seçiniz",
+        )
+
+    # Seçilen İlçe(ler)e göre mahalle listesini filtrele
+    filtered_mahalles_list = []
+    if selected_ilces_graph:
+        # Sadece seçili ilçelerdeki mahalleleri al
+        mahalles_in_selected_ilces = demo_df_for_dropdown_raw[
+            demo_df_for_dropdown_raw["İLÇE"].isin(selected_ilces_graph)
+        ]["MAHALLE"].unique().tolist()
+        filtered_mahalles_list = sorted(mahalles_in_selected_ilces)
+
+    with mahalle_select_col:
+        # Çoklu Mahalle Seçimi (Seçili ilçelere göre filtrelenmiş)
+        selected_mahalles_graph = st.multiselect(
+            "Grafik için Mahalle Seçin:",
+            filtered_mahalles_list, # Filtrelenmiş listeyi kullan
+            key="graph_mahalle_multiselect",
+            placeholder="Lütfen Mahalle Seçiniz",
+        )
+
+    charts_to_display = [] # Altair grafik nesnelerini tutacak liste
+
+    # Kullanıcı hem ilçe hem de mahalle seçtiyse devam et
+    if selected_ilces_graph and selected_mahalles_graph:
+        # Ham veriyi seçilen ilçe ve mahallelere göre filtrele
+        data_for_selected_mahalles = demo_df_for_dropdown_raw[
+             (demo_df_for_dropdown_raw["İLÇE"].isin(selected_ilces_graph)) &
+             (demo_df_for_dropdown_raw["MAHALLE"].isin(selected_mahalles_graph))
+        ].copy() # Kopya üzerinde çalış
+
+        # Filtrelenmiş veride mahalleler varsa grafik oluşturma döngüsüne gir
+        if not data_for_selected_mahalles.empty:
+            # Filtrelenmiş verideki her benzersiz mahalle için grafik oluştur
+            unique_selected_mahalles = data_for_selected_mahalles["MAHALLE"].unique().tolist()
+
+            for mahalle_name in unique_selected_mahalles:
+                # Şu anki mahalle için filtrele (Zaten seçili ilçeler ve mahalleler içinde)
+                mahalle_data_row_dropdown = data_for_selected_mahalles[
+                     (data_for_selected_mahalles["MAHALLE"] == mahalle_name)
+                ].iloc[0] # Bu mahalle adına ait tek satırı al
 
                 graph_data = []
-                # Yaş aralıklarını küçükten büyüğe sıralamak için etiketlerin istediğimiz sırasını belirleyelim (Ekran görüntüsüne göre)
-                age_group_order = ["0-5", "6-13", "14-17", "18-34", "35-64", "65+"]
-
-                # Globaldeki label_to_col'u kullanıyoruz
-                for label in age_group_order: 
-                    # label_to_col global olarak tanımlı olduğu için burada doğrudan kullanabiliriz
-                    original_col = label_to_col.get(label) # Etiketten orijinal sütun adını al
-                    if original_col and original_col in mahalle_data_dropdown:
-                        value = mahalle_data_dropdown[original_col]
+                # Bu mahalle için grafik verilerini hazırla
+                for label in age_group_order:
+                    original_col = label_to_col.get(label) 
+                    if original_col and original_col in mahalle_data_row_dropdown: 
+                        value = mahalle_data_row_dropdown[original_col]
                         if pd.isna(value):
                             value = 0
                         graph_data.append({"Yaş Grubu": label, "Yüzde": value})
                     else:
-                         # Eğer etiket için veri bulunamazsa 0 ekle (Normalde tüm etiketler olmalı)
-                         graph_data.append({"Yaş Grubu": label, "Yüzde": 0})
+                        graph_data.append({"Yaş Grubu": label, "Yüzde": 0}) # Veri yoksa 0 ekle
 
+                if graph_data:
+                    graph_df = pd.DataFrame(graph_data)
+                    # Formatlanmış yüzde sütununu ekle
+                    graph_df['Yüzde_FMT'] = graph_df['Yüzde'].apply(lambda x: f"%{x:.0f}") # Türkçe format
 
-            if graph_data: # Grafik verisi listesi boş değilse
-                graph_df = pd.DataFrame(graph_data)
+                    ilce_name_for_title = data_for_selected_mahalles[
+                        data_for_selected_mahalles["MAHALLE"] == mahalle_name
+                    ]["İLÇE"].iloc[0]
 
-                graph_df['Yüzde_FMT'] = graph_df['Yüzde'].apply(lambda x: f"%{x:.0f}") # <-- Testteki düzeltme uygulandı
+                    bar_chart = alt.Chart(graph_df).mark_bar().encode(
+                        x=alt.X('Yaş Grubu:N', sort=age_group_order, title=None, axis=alt.Axis(labelAngle=0)),
+                        y=alt.Y('Yüzde:Q', title="Yüzde (%)"),
+                        color=alt.Color('Yaş Grubu:N', legend=None),
+                        tooltip=['Yaş Grubu', alt.Tooltip('Yüzde:Q', format='.2f')]
+                    ).properties(
+                        title=f"Yaş Dağılımı - {mahalle_name} ({ilce_name_for_title})", # Başlığa İlçe adını ekle
+                        height=300 # Birden çok grafik için yüksekliği ayarla
+                    )
 
-                # X ekseni etiketleri gösteriliyor, küçükten büyüğe sıralandı ve yatay yapıldı
-                bar_chart = alt.Chart(graph_df).mark_bar().encode(
-                    # Sort parametresi ile etiketlerin sırasını belirle, labelAngle=0 ile yatay yap
-                    x=alt.X('Yaş Grubu:N', sort=age_group_order, title=None, axis=alt.Axis(labelAngle=0)),
-                    y=alt.Y('Yüzde:Q', title="Yüzde (%)"),
-                    color=alt.Color('Yaş Grubu:N', legend=None),
-                    tooltip=['Yaş Grubu', alt.Tooltip('Yüzde:Q', format='.2f')]
-                ).properties(
-                    # title kaldırıldı
-                    height=400 # Biraz daha yüksek yapalım
-                )
+                    # Metin Katmanını Oluştur
+                    text_layer = alt.Chart(graph_df).mark_text(
+                        align='center',
+                        baseline='bottom',
+                        dy=-15, # Çubuğun üstünde konumlandır
+                        size=18 # Yazı boyutu
+                    ).encode(
+                        x=alt.X('Yaş Grubu:N', sort=age_group_order, title=None),
+                        y=alt.Y('Yüzde:Q'),
+                        text=alt.Text('Yüzde_FMT:N'), # Formatlanmış string
+                        color=alt.value('white')
+                    )
 
-                # Test grafiğindeki başarılı ayarları buraya uyguluyoruz
-                text_layer = alt.Chart(graph_df).mark_text(
-                    align='center',      # Metni çubuğun ortasına hizala
-                    baseline='bottom',   # Metni çubuğun en üst çizgisinin altına yerleştir
-                    dy=-15,              # Metni çubuğun üzerine it (piksel cinsinden) - Testteki ayar
-                    size=18   # Metin boyutunu ayarla - Testteki ayar
-                ).encode(
-                    # Aynı X ekseni sıralamasını kullan
-                    x=alt.X('Yaş Grubu:N', sort=age_group_order, title=None),
-                    y=alt.Y('Yüzde:Q'), # Y pozisyonu yine sayısal yüzde değerine göre belirlenir
-                    # Yüzde değerini % formatında string sütundan al
-                    text=alt.Text('Yüzde_FMT:N'), # String sütunu kullanıyoruz (:N nominal olduğunu belirtir) - Testteki düzeltme uygulandı
-                    color=alt.value('white')      # Metin rengini beyaz yap (encode içinde alt.value kullanılır)
-                )
+                    # Katmanları Birleştir
+                    chart = bar_chart + text_layer
+                    charts_to_display.append(chart) # Grafiği listeye ekle
 
-                # Bar (çubuk) katmanı ile Text (metin) katmanını birleştir
-                chart = bar_chart + text_layer
-
-                # Birleştirilmiş grafiği çiz
-                st.altair_chart(chart, use_container_width=True)
-
-                # Konum bilgisi (isteğe bağlı, grafik yanında çok yer kaplamamalı)
-                # Sadece koordinatları göstermek veya tamamen kaldırmak daha iyi olabilir
-                if 'lat' in mahalle_data_dropdown and 'lon' in mahalle_data_dropdown:
-                    lat, lon = mahalle_data_dropdown["lat"], mahalle_data_dropdown["lon"]
-                    # Daha kompakt bir link formatı
-                    st.markdown(f"Konum: [{lat:.4f}, {lon:.4f}](http://maps.google.com/maps?q={lat},{lon}&z=15&hl=tr)")
-
-
-            else:
-                st.info(f"'{selected_mahalle_dropdown}' mahallesinin yaş dağılımı verisi bulunamadı.")
-
-    else:
-        st.warning("Demografi verileri veya yaş yüzde sütunları yüklenemedi.")
-
-# İndirme butonları Demografi bölümünün altında, iki sütunun genişliği boyunca yer alacak.
-st.markdown("---") # Ayırıcı çizgi
-
-col_ham_dem, col_piv_dem, _ = st.columns([1,1,8])
-
-# 1) Ham veri indir (Demografi haritası filtresine göre) - Şimdilik önceki versiyonda kalınacak, tüm sütunları indirme atlandı.
-with col_ham_dem:
-    out_ham = BytesIO()
-    # df_demo_filtered'ın var olduğundan emin olalım
-    if 'df_demo_filtered' in locals() and not df_demo_filtered.empty:
-        df_ham = df_demo_filtered[["İLÇE","MAHALLE","pct_numeric"]].copy()
-        df_ham.rename(columns={"pct_numeric": "Yüzde Aralığı"}, inplace=True)
-        df_ham["Yüzde Aralığı"] = df_ham["Yüzde Aralığı"].round(2)
-
-        if not df_ham.empty: # df_ham boş değilse yazma işlemini yap
-            with pd.ExcelWriter(out_ham, engine="xlsxwriter") as writer:
-                sheet = "Ham Demografi Verisi"
-                wb = writer.book
-                ws = wb.add_worksheet(sheet)
-                writer.sheets[sheet] = ws
-                # 1. satıra kullanıcı girdilerini yaz
-                ws.write(0, 0, "Seçili Yaş Grubu:")
-                ws.write(0, 1, selected_label_map) # selected_label yerine selected_label_map kullanıldı
-                ws.write(0, 2, "Filtre Aralığı (%):")
-                ws.write(0, 3, st.session_state.dem_range or "—")
-                # 3. satırdan itibaren gerçek veri
-                df_ham.to_excel(writer, sheet_name=sheet, index=False, startrow=1)
-
-            st.download_button(
-                "Ham Veriyi İndir",
-                data=out_ham.getvalue(),
-                file_name=f"demografi_ham_{selected_label_map}.xlsx", # Dosya adı selected_label_map kullanılarak güncellendi
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                type="secondary"
-            )
+            # Grafik listesi boş değilse (yani seçilen mahalleler için veri bulunduysa)
+            if charts_to_display:
+                charts_per_row = 5 # Bir satırda gösterilecek max grafik sayısı
+                # Grafik listesini 5'erli gruplara ayır
+                for i in range(0, len(charts_to_display), charts_per_row):
+                    row_charts = charts_to_display[i : i + charts_per_row]
+                    # Bu satırdaki grafik sayısına göre sütun oluştur
+                    cols = st.columns(len(row_charts))
+                    # Bu satırdaki grafikler üzerinde döngü kur ve sütunlarda göster
+                    for j in range(len(row_charts)):
+                         with cols[j]:
+                             st.altair_chart(row_charts[j], use_container_width=True)
         else:
-             st.warning("İndirilecek ham demografi verisi bulunamadı (Filtrelemeye uygun veri yok).")
-    else:
-         st.warning("Ham demografi verisi indirmek için uygun veri (df_demo_filtered) bulunamadı.")
+             st.info("Seçilen ilçe ve mahalle kombinasyonu için veri bulunamadı.")
 
 
-# 2) Pivot veri indir (Demografi haritası filtresine göre) - Şimdilik önceki versiyonda kalınacak, tüm sütunları indirme atlandı.
-with col_piv_dem: # Değişken adı güncellendi
-    out_piv = BytesIO()
-    # pct_columns'ın bu noktada tanımlı olması lazım
-    cols_for_pivot_initial = ['İLÇE'] + (pct_columns if 'pct_columns' in globals() else []) # pct_columns tanımlıysa kullan
-    piv_dem = pd.DataFrame(columns=cols_for_pivot_initial) # piv_dem değişkeni burada tanımlandı
+    elif selected_ilces_graph: # İlçe(ler) seçili ama mahalle(ler) henüz seçili değil
+        st.info(f"Lütfen seçili ilçe ({', '.join(selected_ilces_graph)}) içinden grafik çizmek için bir veya daha fazla mahalle seçin.")
+    elif all_ilces_list: # İlçe(ler) henüz seçili değil
+        st.info("Lütfen grafik çizmek için bir veya daha fazla ilçe seçin.")
+    # else: all_ilces_list boşsa, dış if tarafından zaten uyarı verilir.
 
-
-    # df_demo_filtered'ın var olduğundan emin olalım
-    if 'df_demo_filtered' in locals() and not df_demo_filtered.empty and "pct_numeric" in df_demo_filtered.columns and "İLÇE" in df_demo_filtered.columns:
-        piv_dem = ( # piv_dem burada da atanabilir
-            df_demo_filtered
-            .groupby("İLÇE", as_index=False)
-            .agg({"pct_numeric": "mean"})
-            .rename(columns={"pct_numeric": selected_label_map + " Yüzde Ortalama"}) # Sütun adı güncellendi
-        )
-        if not piv_dem.empty:
-            # Sadece yüzde sütununu yuvarla (artık sadece bir tane var)
-            yuzde_col_name = selected_label_map + " Yüzde Ortalama"
-            if yuzde_col_name in piv_dem.columns:
-                 piv_dem[yuzde_col_name] = piv_dem[yuzde_col_name].round(2)
-
-                 numeric_cols_in_piv = piv_dem.select_dtypes(include=np.number).columns.tolist()
-                 if numeric_cols_in_piv:
-                     toplam_row_data = {"İLÇE":"Genel Ortalama"}
-                     for num_col in numeric_cols_in_piv:
-                         toplam_row_data[num_col] = piv_dem[num_col].mean().round(2)
-                     piv_dem = pd.concat([piv_dem, pd.DataFrame([toplam_row_data])], ignore_index=True)
-                 else:
-                     st.warning("Pivot tablo genel ortalaması için sayısal sütun bulunamadı.")
-
-
-            else:
-                 st.warning("Pivot tablo oluşturmak için uygun filtrelenmiş demografi verisi bulunamadı.")
-                 # piv_dem zaten yukarıda boş DataFrame olarak tanımlı.
-
-    else:
-        st.warning("Pivot tablo oluşturmak için uygun filtrelenmiş demografi verisi bulunamadı.")
-        # piv_dem zaten yukarıda boş DataFrame olarak tanımlı.
-
-
-    # piv_dem artık bu noktada her zaman tanımlı (veri içerse de içermese de)
-    if not piv_dem.empty: #<- Bu satır hata veriyordu. Şimdi piv_dem tanımlı.
-        with pd.ExcelWriter(out_piv, engine="xlsxwriter") as writer:
-            sheet = "Pivot Demografi"
-            wb = writer.book
-            ws = wb.add_worksheet(sheet)
-            writer.sheets[sheet] = ws
-            ws.write(0, 0, "Harita Rengi Yaş Grubu:")
-            ws.write(0, 1, selected_label_map)
-            ws.write(0, 2, "Filtre Aralığı (%):")
-            ws.write(0, 3, st.session_state.dem_range or "—")
-            piv_dem.to_excel(writer, sheet_name=sheet, index=False, startrow=1)
-
-        st.download_button(
-            "Pivot Tabloyu İndir",
-            data=out_piv.getvalue(),
-            file_name=f"demografi_pivot_{selected_label_map}.xlsx", # Dosya adı selected_label_map kullanılarak güncellendi
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="primary"
-        )
-    else:
-         st.warning("İndirilecek pivot demografi verisi bulunamadı.")
+else:
+    st.warning("Grafikler için mahalle demografi verileri yüklenemedi.")
