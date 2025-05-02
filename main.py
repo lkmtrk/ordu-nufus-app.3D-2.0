@@ -1008,126 +1008,6 @@ else: # df_demo_filtered is empty (from initial load or filter result)
      st.warning("Harita için veri bulunamadı (Demografi).")
 
 
-
-
-
-# --- Yaş Dağılım Grafikleri (İki Aşamalı Seçim ve Butonla Gösterim - Yeni Layout) ---
-# Bu bölüm demografi haritası ve onun indirme butonlarından sonra geliyor.
-
-# st.markdown("---") # Ayırıcı çizgi
-# st.markdown("### 📊 Seçilen Mahallelerin Yaş Dağılım Grafikleri")
-
-
-# if 'last_mahalle_list' not in st.session_state:
-#     st.session_state.last_mahalle_list = []
-# # -----------------------------
-# # Sabit Tanımlar ve Veri Yükleme
-# # -----------------------------
-# age_group_order = ["0-5", "6-13", "14-17", "18-34", "35-64", "65+"]
-
-# @st.cache_data(show_spinner=False)
-# def get_demo_data():
-#     return load_all_age_demographics()
-
-# demo_df = get_demo_data()
-
-# # Yaş yüzde kolon eşleştirme
-# pct_columns = [c for c in demo_df.columns if c.endswith(" YAŞ YÜZDE")]
-# pct_labels  = [c.replace(" YAŞ YÜZDE", "") for c in pct_columns]
-# label_to_col = dict(zip(pct_labels, pct_columns))
-# all_ilces_list = sorted(demo_df["İLÇE"].unique())
-
-# @st.cache_data
-# def build_graph_df(mahalle: str) -> pd.DataFrame:
-#     row = demo_df[demo_df["MAHALLE"] == mahalle].iloc[0]
-#     return pd.DataFrame([
-#         {"Yaş Grubu": lbl,
-#          "Yüzde": float(row.get(label_to_col[lbl], 0) or 0),
-#          "PctFmt": f"%{float(row.get(label_to_col[lbl], 0) or 0):.0f}"}
-#         for lbl in age_group_order
-#     ])
-
-# # -----------------------------
-# # Form: İlçe ve Mahalle Seçimi + Butonlar
-# # -----------------------------
-
-# with st.form("grafik_form"):
-#     # 1. satır: İlçe ve Mahalle seçim kutuları
-#     sel_col1, sel_col2 = st.columns([2, 2])
-#     with sel_col1:
-#         selected_ilces = st.multiselect(
-#             "İlçe:",
-#             all_ilces_list,
-#             key="ilce_multiselect",
-#             placeholder="Lütfen bir ya da daha fazla ilçe seçin"
-#         )
-#     with sel_col2:
-#         available = (
-#             sorted(demo_df[demo_df["İLÇE"].isin(selected_ilces)]["MAHALLE"].unique())
-#             if selected_ilces else []
-#         )
-#         selected_mahalles = st.multiselect(
-#             "Mahalle:",
-#             available,
-#             key="mahalle_multiselect",
-#             placeholder="Lütfen bir ya da daha fazla mahalle seçin"
-#         )
-
-#     # 2. satır: Butonlar için 4 sütun düzeni 2,0.5,2,0.5
-#     btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2, 0.5, 2, 0.5])
-#     with btn_col2:
-#         choose = st.form_submit_button("İlçe Seç", type="primary", use_container_width=True)
-#     with btn_col4:
-#         show = st.form_submit_button("Grafiği Göster", type="primary", use_container_width=True)
-
-# if show:
-#     # Kullanıcının o anki mahalle seçimini kaydet
-#     st.session_state.last_mahalle_list = st.session_state.get("mahalle_multiselect", []).copy()
-
-# current = st.session_state.get("mahalle_multiselect", [])
-# if current != st.session_state.last_mahalle_list:
-#     st.warning(
-#         "Seçiminizde değişiklik yaptınız. "
-#         "Yeni grafikleri görmek için lütfen “Grafiği Göster” butonuna basın."
-#     )
-
-
-# # -----------------------------
-# # 5) Grafik Gösterim
-# # -----------------------------
-# if show:
-#     if not selected_ilces:
-#         st.warning("Lütfen önce bir ilçe seçip 'Seç' butonuna basın.")
-#     elif not selected_mahalles:
-#         st.warning("Lütfen en az bir mahalle seçin.")
-#     else:
-#         charts = []
-#         for m in selected_mahalles:
-#             df_g = build_graph_df(m)
-#             ilce = demo_df.loc[demo_df["MAHALLE"] == m, "İLÇE"].iloc[0]
-#             bar = alt.Chart(df_g).mark_bar().encode(
-#                 x=alt.X("Yaş Grubu:N", sort=age_group_order, title=None),
-#                 y=alt.Y("Yüzde:Q", title="Yüzde (%)"),
-#                 color=alt.Color("Yaş Grubu:N", legend=None),
-#                 tooltip=[alt.Tooltip("PctFmt:N", title="Yüzde")]
-#             ).properties(title=f"{m} ({ilce})", height=300)
-#             text = alt.Chart(df_g).mark_text(align="center", baseline="bottom", dy=-10).encode(
-#                 x=alt.X("Yaş Grubu:N", sort=age_group_order),
-#                 y="Yüzde:Q", text="PctFmt:N"
-#             )
-#             charts.append(bar + text)
-
-#         for i in range(0, len(charts), 5):
-#             row = charts[i : i + 5]
-#             cols = st.columns(len(row))
-#             for idx, ch in enumerate(row):
-#                 with cols[idx]:
-#                     st.altair_chart(ch, use_container_width=True)
-
-
-
-
-
 # --- Yaş Dağılım Grafikleri (İki Aşamalı Seçim ve Butonla Gösterim - Yeni Layout) ---
 # Bu bölüm demografi haritası ve onun indirme butonlarından sonra geliyor.
 if "last_mahalle_list" not in st.session_state:
@@ -1135,6 +1015,7 @@ if "last_mahalle_list" not in st.session_state:
 
 st.markdown("---") # Ayırıcı çizgi
 st.markdown("### 📊 Seçilen Mahallelerin Yaş Dağılım Grafikleri")
+st.markdown("*Karşılaştırma Yapmak İstediğiniz Mahalleleri Seçin.*")
 
 
 # -----------------------------
