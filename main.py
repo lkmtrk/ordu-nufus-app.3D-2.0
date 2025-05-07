@@ -1,6 +1,8 @@
+import streamlit as st
 import pandas as pd
 import pydeck as pdk
-import streamlit as st
+import plotly.express as px
+import base64
 import json
 import re
 from io import BytesIO
@@ -8,6 +10,34 @@ import altair as alt
 import numpy as np
 from streamlit.components.v1 import html
 
+# -----------------------------
+# 0) SAYFA AYARLARI & HEADER
+# -----------------------------
+st.set_page_config(page_title="Ordu İli Nüfus Analizi",layout="wide", initial_sidebar_state="expanded")
+st.markdown("<meta name='language' content='tr'>", unsafe_allow_html=True)
+
+def get_base64_image(image_path):
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+logo_base64 = get_base64_image("logo.png")
+
+st.markdown(f"""
+<div style="display: flex; align-items: center; justify-content: center; gap: 25px; padding: 15px 0;">
+    <img src="data:image/png;base64,{logo_base64}" width="140">
+    <div style="text-align: left;">
+        <h2 style="margin: 0; color: white;">NÜFUS ANALİZ PORTALİ</h2>
+    </div>
+</div>
+<hr>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div style='text-align: center; font-size: 16px; color: #ccc; margin-top: -10px; margin-bottom: 10px;'>
+Bu uygulama Ordu iline ait nüfus verilerini yıl, ilçe ve mahalle bazında analiz etmenizi sağlar. 
+Aşağıdaki grafikler üzerinden verileri karşılaştırabilir ve Excel formatında indirebilirsiniz.
+</div>
+""", unsafe_allow_html=True)
 
 # -----------------------------
 # 0) ÖNBELLEKLENMİŞ FONKSİYONLAR
@@ -220,13 +250,6 @@ def create_safe_col_name(col_name):
 # 1) SAYFA KONFİGÜRASYONU & META YÜKLEME
 # -----------------------------
 
-st.set_page_config(page_title="Ordu Nüfus Haritası", layout="wide")
-# Pydeck tooltip rengini pembe yapmak için style (kullanıcının isteği üzerine)
-st.markdown("""<style>
-   .deck-tooltip { background-color: magenta!important; color: white!important;
-               border-radius: 4px; padding: 4px; }
-</style>""", unsafe_allow_html=True)
-st.markdown("## 📊 Ordu İli Nüfus Haritası (2007 - 2024)")
 
 # Tüm sütun isimleri ve lat/lon’u almak için
 df_full = load_parquet_data("koordinatlı_nufus_verisi.parquet")
@@ -273,6 +296,56 @@ ilce_lookup  = build_geo_lookup(ilce_geojson, "AD")
 
 mahalle_geojson = load_geojson(mahalle_geojson_path)
 mahalle_lookup  = build_geo_lookup(mahalle_geojson, "KOD")
+
+# -------------------------------
+# 1. ORDU İLİ NÜFUS ANALİZİ 
+# -------------------------------
+
+# ──────────── 4) PIVOT TO LONG ────────────
+year_cols = [c for c in df_full.columns if c.strip().startswith("20") and "YILI NÜFUSU" in c]
+df_long = pd.melt(
+    df_full,
+    id_vars=["İLÇE", "MAHALLE"],
+    value_vars=year_cols,
+    var_name="YIL",
+    value_name="NÜFUS (KİŞİ SAYISI)"
+)
+df_long["YIL"] = df_long["YIL"].str.extract(r"(20\d{2})")
+df_long["NÜFUS (KİŞİ SAYISI)"] = pd.to_numeric(df_long["NÜFUS (KİŞİ SAYISI)"], errors="coerce")
+years = sorted(df_long["YIL"].dropna().unique().tolist())
+
+# ──────────── 5) SELECTIONS & FIRST CHART ────────────
+
+st.markdown("### 📈Ordu İli Nüfus Nüfus Analizi")
+
+# Orta bloğu 3 kolonlu dış düzenle sarıyoruz (1-2-1)
+outer1, outer2, outer3 = st.columns([1, 2, 1])
+with outer2:
+    # içte 2 kolon: biri Başlangıç, diğeri Bitiş
+    col1, col2 = st.columns(2)
+    start_year = col1.selectbox("Başlangıç Yılı", years, index=0)
+    end_year   = col2.selectbox("Bitiş Yılı",     years, index=len(years)-1)
+
+    if start_year > end_year:
+        st.warning("Başlangıç yılı, bitiş yılından büyük olamaz!")
+    else:
+        df_filtered = df_long[(df_long["YIL"] >= start_year) & (df_long["YIL"] <= end_year)]
+
+        st.markdown(
+        f"<h4 style='font-size:22px; margin-bottom: 8px;'>📈 Genel Nüfus Değişimi ({start_year} - {end_year})</h4>",
+        unsafe_allow_html=True
+        )
+        ordu_geneli = (
+            df_filtered
+            .groupby("YIL")["NÜFUS (KİŞİ SAYISI)"]
+            .sum()
+            .reset_index()
+        )
+        st.plotly_chart(
+            px.line(ordu_geneli, x="YIL", y="NÜFUS (KİŞİ SAYISI)", markers=True),
+            key="chart_ordu"
+        )
+
 
 
 # -------------------------------
@@ -762,9 +835,127 @@ if secili_yil_mahalle:
             st.info("Seçiminize uygun mahalle verisi bulunamadığından pivot tablo yalnızca başlıkları içeriyor.")
 
 
+# -------------------------------
+# 4. MAHALLELERİN YILLIK NÜFUS GRAFİĞİ
+# -------------------------------
+
+
+# ► İlçe seçimi ve ilçe dataframe’i oluşturma# ► İlçe ve mahalle seçimi + grafikler
+
+# 1) İlçe seçimi
+ilceler = sorted(df_filtered["İLÇE"].unique().tolist())
+default_idx = ilceler.index("Altınordu") if "Altınordu" in ilceler else 0
+secili_ilce = st.selectbox(
+    "🔽 İlçe Seçin",
+    ilceler,
+    index=default_idx,
+    key="secili_ilce"
+)
+# İlçeye ait tüm mahalle-veri
+ilce_df = df_filtered[df_filtered["İLÇE"] == secili_ilce]
+
+# 2) Tüm mahallelerin grafiği (1-2-1 sütun düzeni)
+outer1, outer2, outer3 = st.columns([1, 2, 1])
+with outer2:
+    st.subheader(f"🏘️ {secili_ilce.upper()} İlçesi Mahallelerinin Yıllık Nüfus Grafiği")
+    st.plotly_chart(
+        px.line(
+            ilce_df,
+            x="YIL",
+            y="NÜFUS (KİŞİ SAYISI)",
+            color="MAHALLE",
+            markers=True
+        ),
+        key="chart_all_mahalle"
+    )
+
+# 3) Mahalle seçimi arayüzü
+# Session state’i hazırla
+if "secili_mahalleler" not in st.session_state:
+    st.session_state.secili_mahalleler = []
+
+# … önceki bloklar …
+
+# ► İlçe seçiminden hemen sonra …
+# secili_ilce tanımlı olduğuna emin olun
+
+# ► Mahalle seçim ve grafik bloğu
+outer1, outer2, outer3 = st.columns([1, 2, 1])
+with outer2:
+
+    st.markdown("🔽 Aşağıdan bir veya birden fazla mahalle seçin. Grafikler ve indirme dosyaları seçiminize göre güncellenir.")
+
+    # Butonlar
+    btn1_col, btn2_col = st.columns([1, 1], gap="small")
+    with btn1_col:
+        if st.button("Tümünü Seç", type="primary", use_container_width=False, key="btn_select_all"):
+            st.session_state.secili_mahalleler = sorted(ilce_df["MAHALLE"].unique().tolist())
+    with btn2_col:
+        if st.button("❌ Temizle", type="secondary", use_container_width=False, key="btn_clear_selection"):
+            st.session_state.secili_mahalleler = []
+
+    # Çoklu seçim kutusu
+    secili_mahalleler = st.multiselect(
+       "Mahalle Seçin",
+       options=sorted(ilce_df["MAHALLE"].unique().tolist()),
+       key="secili_mahalleler",
+       label_visibility="collapsed",
+       placeholder="Bir veya birden fazla mahalle seçin"
+    )
+
+    st.info(f"🟢 Seçili mahalle sayısı: {len(secili_mahalleler)}")
+
+    # Seçilen mahallelerin grafiği + indirme
+    if secili_mahalleler:
+        df_sel = ilce_df[ilce_df["MAHALLE"].isin(secili_mahalleler)]
+
+        st.subheader(f"📊 Seçilen Mahallelerin Yıllık Nüfus Grafiği")
+        st.plotly_chart(
+            px.line(
+                df_sel,
+                x="YIL",
+                y="NÜFUS (KİŞİ SAYISI)",
+                color="MAHALLE",
+                markers=True
+            ),
+            key="chart_selected_mahalle"
+        )
+
+        # Ham veri indir
+        ham_out = BytesIO()
+        df_sel.to_excel(ham_out, index=False)
+        st.download_button(
+            "Ham Veri İndir",
+            type="secondary",
+            data=ham_out.getvalue(),
+            file_name=f"{secili_ilce}_mahalle_ham.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        # Pivot tablo indir
+        pivot = df_sel.pivot_table(
+            index="MAHALLE",
+            columns="YIL",
+            values="NÜFUS (KİŞİ SAYISI)",
+            aggfunc="sum"
+        )
+        pivot.loc["TOPLAM"] = pivot.sum(numeric_only=True)
+        pivot.reset_index(inplace=True)
+        piv_out = BytesIO()
+        pivot.to_excel(piv_out, index=False)
+        st.download_button(
+            "Pivot Tablo İndir",
+            type="primary",
+            data=piv_out.getvalue(),
+            file_name=f"{secili_ilce}_mahalle_pivot.xlsx",
+            mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet"
+        )
+
+
+
 
 # -------------------------------
-# 3. DEMOGRAFİ HARİTASI (% Yaş Dağılımı) (Pydeck)
+# 5. DEMOGRAFİ HARİTASI (% Yaş Dağılımı) (Pydeck)
 # -------------------------------
 
 st.markdown("### 👥 Demografi Haritası (% Yaş Dağılımı)") # Bölüm başlığı
