@@ -64,8 +64,7 @@ def load_parquet_mahalle(path: str, year: str) -> pd.DataFrame:
         "MAHALLE",
         "MAHALLE KODU (AKS)",
         f"{year} YILI NÜFUSU",
-        "Latitude",
-        "Longitude"
+        "KONUMA GİT"
     ]
     try:
         df = pd.read_parquet(path, columns=cols)
@@ -117,6 +116,32 @@ def load_parquet_demo(path: str, pct_col: str) -> pd.DataFrame:
         },
         errors="ignore"
     )
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def get_demo_data():
+    import os
+    parquet_path = "bar_grafik_verisi.parquet"
+    # Eğer Parquet cache varsa doğrudan yükle
+    if os.path.exists(parquet_path):
+        df = pd.read_parquet(parquet_path)
+    else:
+        # Excel'den oku, temizle ve Parquet'e yaz
+        df = pd.read_excel("bar_grafik_verisi.xlsx")
+        # Sütun isimlerini normalize et
+        df.columns = [col.strip() for col in df.columns]
+        # Yüzde sütunlarını float'a çevir
+        for col in df.columns:
+            if col.upper().endswith("YAŞ YÜZDE"):
+                df[col] = (
+                    df[col].astype(str)
+                         .str.replace('%','', regex=False)
+                         .str.replace(',','.', regex=False)
+                         .astype(float)
+                )
+        # Parquet olarak kaydet
+        df.to_parquet(parquet_path)
     return df
 
 # load_all_age_demographics fonksiyonu, dropdown grafik için tüm yaş yüzde sütunlarını yükler
@@ -311,7 +336,7 @@ if secili_yil_ilce:
 
 
     # 4) Formatlama & renk — vektörize
-    df_ilce["NÜFUS_FMT"] = (df_ilce["NÜFUS"].astype(int).map("{:,.0f}".format).str.replace(",", "."))
+    df_ilce["NÜFUS_FMT"] = (df_ilce["NÜFUS"].astype(int).map("{:,.0f}".format).astype(str).str.replace(",", "."))
 
     # İlçe için kategorilere ayırma ve renk atama
     bins_i = [-float("inf"), 10000, 13000, 20000, 25000, 100000, 200000, float("inf")]
@@ -368,9 +393,7 @@ if secili_yil_ilce:
              )
              layers.append(border_layer)
         elif st.session_state.ilce_filter and not filtered_ilce_features:
-             st.warning("Filtre kriterlerinize uyan ilçe bulunamadığı için ilçe sınırları gösterilemiyor.")
-        elif not ilce_geojson:
-             st.warning("İlçe sınırları GeoJSON verisi yüklenemedi.")
+            border_layer = None
 
     # 9) Haritayı çiz
     st.pydeck_chart(pdk.Deck(
@@ -385,91 +408,70 @@ if secili_yil_ilce:
         tooltip={"text": "{İLÇE}: {NÜFUS_FMT}"}
     ))
 
-    # 10) Excel indirme butonları
-    ea, eb, _ = st.columns([1, 1, 8])
-    with ea:
-        out_ilce = BytesIO()
-        df_export = df_ilce.copy()
-        df_export["YIL"] = secili_yil_ilce
-
-        # Define the desired order of columns for the Ham export
-        desired_ham_order = ["İLÇE", "YIL", "NÜFUS"] # <-- Sütun sırası değiştirildi
-
-        cols_to_export = desired_ham_order # Use the desired order list directly
-
-        # Ensure these columns actually exist in the dataframe before selecting
-        cols_to_export_present = [col for col in desired_ham_order if col in df_export.columns]
-        # Handle case where not all desired columns are present (unlikely here but good practice)
-        if len(cols_to_export_present) != len(desired_ham_order):
-            st.warning(f"Expected columns {desired_ham_order} not all present in İlçe ham data. Exporting available columns.")
-
-        # Ham veri exportundan 'lat' ve 'lon' sütunları kaldırıldı (Önceki istek)
-        cols_to_export_present = [col for col in cols_to_export_present if col not in ['lat', 'lon']] # <-- 'lat', 'lon' eklendiği satır buraya taşındı ve düzenlendi
-
-        df_export[cols_to_export_present].to_excel(out_ilce, index=False, sheet_name="Ham İlçe Verisi")
-
-
-        st.download_button(
-            "Ham Veriyi İndir",
-            data=out_ilce.getvalue(),
-            file_name=f"ilce_ham_{secili_yil_ilce}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-            type="secondary"
-        )
+# 10) Excel indirme butonları
+ea, eb, _ = st.columns([1, 1, 8])
+with ea:
+    out_ilce = BytesIO()
+    df_export = df_ilce.copy()
+    df_export["YIL"] = secili_yil_ilce
+    cols_to_export = ["İLÇE", "YIL", "NÜFUS"]
+    cols_to_export = [c for c in cols_to_export if c in df_export.columns]
+    df_export[cols_to_export].to_excel(out_ilce, index=False, sheet_name="Ham İlçe Verisi")
+    st.download_button(
+        "Ham Veriyi İndir",
+        data=out_ilce.getvalue(),
+        file_name=f"ilce_ham_{secili_yil_ilce}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet",
+        use_container_width=True,
+        type="secondary",
+        key="ham_ilce_download"
+    )
 
 with eb:
-        outp_ilce = BytesIO()
-        df_piv_source = load_parquet_ilce("koordinatlı_nufus_verisi.parquet", secili_yil_ilce).copy()
-        # Filtre uygulanmışsa pivot tablo kaynağını da filtrele
-        if st.session_state.ilce_filter and st.session_state.ilce_range:
-             try:
-                lo, hi = map(int, st.session_state.ilce_range.split("-"))
-                df_piv_source = df_piv_source[df_piv_source["NÜFUS"].between(lo, hi)]
-             except ValueError:
-                pass
+    outp_ilce = BytesIO()
+    df_piv_source = load_parquet_ilce("koordinatlı_nufus_verisi.parquet", secili_yil_ilce).copy()
+    if st.session_state.ilce_filter and st.session_state.ilce_range:
+        lo, hi = map(int, st.session_state.ilce_range.split("-"))
+        df_piv_source = df_piv_source[df_piv_source["NÜFUS"].between(lo, hi)]
 
-        if not df_piv_source.empty:
-            piv = (
-                df_piv_source[["İLÇE", "NÜFUS"]]
-                .groupby("İLÇE")
-                .sum()
-                .reset_index()
-                .assign(YIL=secili_yil_ilce)
-            )
+    if not df_piv_source.empty:
+        piv = (
+            df_piv_source[["İLÇE", "NÜFUS"]]
+            .groupby("İLÇE", as_index=False)
+            .sum()
+            .assign(YIL=secili_yil_ilce)
+        )
+    else:
+        # Boş DataFrame, ama sütunları tanımlı olsun
+        piv = pd.DataFrame(columns=["İLÇE", "NÜFUS", "YIL"])
 
-            pivot_cols_order = ["İLÇE", "YIL", "NÜFUS"] # <-- Sütun sırası değiştirildi
-            # Ensure all desired columns exist in piv before reordering
-            pivot_cols_present = [col for col in pivot_cols_order if col in piv.columns]
-            # Sadece mevcut sütunlarla yeniden indexleme yaparak sırayı uygula
-            piv = piv[pivot_cols_present]
+    # Genel Toplam satırını ekle
+    totals = piv.select_dtypes(include="number").sum().to_dict()
+    totals["İLÇE"] = "Genel Toplam"
+    totals["YIL"] = ""   # yıl hücresi boş
+    piv = pd.concat([piv, pd.DataFrame([totals])], ignore_index=True)
 
-            # Genel Toplam satırı için veriyi hazırla
-            totals_numeric = piv.select_dtypes(include=np.number).sum().to_dict()
-            toplam_row_data = {"İLÇE": "Genel Toplam"}
-            toplam_row_data.update(totals_numeric) # Sayısal toplamları ekle
+    # --- SÜTUN SIRASINI DÜZELT ---
+    cols_to_export = ["İLÇE", "YIL", "NÜFUS"]
+    # Var olanlar arasında sırayı uygula
+    cols_to_export = [c for c in cols_to_export if c in piv.columns]
+    piv = piv[cols_to_export]
 
-            piv = pd.concat([piv, pd.DataFrame([toplam_row_data])], ignore_index=True) # Toplam satırını ekle
+    # Excel’e yaz
+    with pd.ExcelWriter(outp_ilce, engine="xlsxwriter") as writer:
+        piv.to_excel(writer, sheet_name="Pivot İlçe", index=False)
 
-            # Excel'e yazma kısmı
-            with pd.ExcelWriter(outp_ilce, engine="xlsxwriter") as writer:
-                 sheet = "Pivot İlçe"
-                 wb = writer.book
-                 ws = wb.add_worksheet(sheet)
-                 writer.sheets[sheet] = ws
+    # İndirme butonu (her koşulda gösterilir)
+    st.download_button(
+        "Pivot Tabloyu İndir",
+        data=outp_ilce.getvalue(),
+        file_name=f"ilce_pivot_{secili_yil_ilce}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        type="primary",
+        key="pivot_ilce_download"
+    )
 
-                 piv.to_excel(writer, sheet_name=sheet, index=False, startrow=0) # <-- startrow 0 olarak değiştirildi
-
-            st.download_button(
-                "Pivot Tabloyu İndir",
-                data=outp_ilce.getvalue(),
-                file_name=f"ilce_pivot_{secili_yil_ilce}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                type="primary"
-            )
-        else:
-             st.warning("Pivot tablo oluşturmak için uygun nüfus verisi bulunamadı.")
 
 
 # -------------------------------
@@ -606,161 +608,158 @@ if secili_yil_mahalle:
 
 
         # 9) Sınır checkbox & GeoJSON filtresi
-        show = st.checkbox("Mahalle Sınırlarını Gö göster", value=True, key="show_mahalle_borders_only") # Yazım hatası düzeltildi
+        show_borders = st.checkbox(
+            "Mahalle Sınırlarını Göster",
+            value=True,
+            key="show_mahalle_borders_only"
+        )
 
+        # Seçili mahalle kodlarına göre filtrelenmiş GeoJSON
         allowed = set(df_mahalle_filtered["MAHALLE KODU (AKS)"].astype(int))
-
         filtered_mahalle_features = [
             mahalle_lookup[code]
             for code in allowed
             if code in mahalle_lookup
         ]
-        # Filtre aktifse filtrelenmiş geojson kullan, değilse tam geojson kullan
-        geo = {"type":"FeatureCollection","features": filtered_mahalle_features} if show and st.session_state.filter_active else mahalle_geojson
-
-        # GeoJSON geçerli ve feature içeriyor mu kontrolü
-        if geo and geo.get('features'):
-             border = pdk.Layer("GeoJsonLayer", geo, stroked=True, filled=False,
-                                 get_line_color=[3,32,252,180], line_width_min_pixels=1)
-        elif st.session_state.filter_active and not filtered_mahalle_features:
-             st.warning("Filtre kriterlerinize uyan mahalle bulunamadığı için mahalle sınırları gösterilemiyor.")
-             border = None
-        elif not mahalle_geojson:
-             st.warning("Mahalle sınırları GeoJSON verisi yüklenemedi.")
-             border = None
+        # Hangi GeoJSON’u kullanacağımızı seçiyoruz
+        if st.session_state.filter_active:
+            geo_to_use = {
+                "type": "FeatureCollection",
+                "features": filtered_mahalle_features
+            }
         else:
-             border = None # Diğer durumlar için border yok
+            geo_to_use = mahalle_geojson
 
         # 10) Harita çizimi
         layers_mahalle = [clustered_mahalle_layer]
-        if border: # Border katmanı None değilse ekle
-            layers_mahalle.append(border)
+
+        # Sınırları ekle (sadece mahalle sınırları, ilçe sınırları eklenmiyor)
+        if show_borders and geo_to_use.get("features"):
+            border_layer = pdk.Layer(
+                "GeoJsonLayer",
+                geo_to_use,
+                stroked=True,
+                filled=False,
+                get_line_color=[3, 32, 252, 180],
+                line_width_min_pixels=1
+            )
+            layers_mahalle.append(border_layer)
 
         st.pydeck_chart(pdk.Deck(
             map_style="https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json",
-            initial_view_state=pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=8, pitch=40),
+            initial_view_state=pdk.ViewState(
+                latitude=center_lat,
+                longitude=center_lon,
+                zoom=8,
+                pitch=40
+            ),
             layers=layers_mahalle,
-            tooltip={"html": "<b>{MAHALLE}</b><br/>İlçe: {İLÇE}<br/>Nüfus ({YIL}): {NÜFUS_FMT}".replace("{YIL}", str(secili_yil_mahalle))}
+            tooltip={
+                "html": (
+                    "<b>{MAHALLE}</b><br/>"
+                    "İlçe: {İLÇE}<br/>"
+                    f"Nüfus ({secili_yil_mahalle}): "+"{NÜFUS_FMT}"
+                )
+            }
         ))
+
 
         # Excel indirme butonları
         col_excel1, col_excel2, _ = st.columns([1, 1, 8])
 
-        # Ham veri indir
-        with col_excel1:
-            output = BytesIO()
-            # Ham veri için filtrelenmiş veriyi kullan
-            df_export_mahalle_ham = df_mahalle_filtered.copy()
-            df_export_mahalle_ham["YIL"] = secili_yil_mahalle
-            df_export_mahalle_ham["KONUMA GİT"] = df_export_mahalle_ham.apply(
-                lambda row: f"https://www.google.com/maps?q={row['lat']},{row['lon']}&z=13&hl=tr",
-                axis=1
+    # Ham veri indir
+    with col_excel1:
+        output = BytesIO()
+
+        # 1) İhracat DataFrame’ini hazırla ve sütun sırasını kesinleştir
+        df_export_mahalle_ham = (
+            df_mahalle_filtered
+            .assign(YIL=secili_yil_mahalle)
+            # burada ŞU SIRAYLA SEÇİYORUZ:
+            [["İLÇE", "MAHALLE", "YIL", "NÜFUS", "KONUMA GİT"]]
+        )
+
+        # 2) Excel’e yaz ve 'KONUMA GİT' linklerini "Git" metniyle tıklanabilir yap
+        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+            sheet_name = "Ham Mahalle Verisi"
+            df_export_mahalle_ham.to_excel(writer, sheet_name=sheet_name, index=False)
+            ws = writer.sheets[sheet_name]
+
+            link_col_idx = df_export_mahalle_ham.columns.get_loc("KONUMA GİT")
+            for row_idx, url in enumerate(df_export_mahalle_ham["KONUMA GİT"], start=1):
+                if isinstance(url, str) and url.startswith("http"):
+                    ws.write_url(row_idx, link_col_idx, url, string="Git")
+
+        # 3) İndirme butonu
+        st.download_button(
+            "Ham Veriyi İndir",
+            data=output.getvalue(),
+            file_name=f"mahalle_ham_veri_{secili_yil_mahalle}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="secondary",
+            key="ham_mahalle_download"
+        )
+
+
+
+    # Pivot tablo indir
+    with col_excel2:
+        pivot_output = BytesIO()
+        # Pivot tablo için filtrelenmiş df_mahalle verisini kullan
+        df_piv_source_mahalle = df_mahalle_filtered.copy()
+
+        # --- PIVOT TABLO HAZIRLA ---
+        if not df_piv_source_mahalle.empty and pd.api.types.is_numeric_dtype(df_piv_source_mahalle["NÜFUS"]):
+            pivot_df_mahalle = (
+                df_piv_source_mahalle[["İLÇE", "MAHALLE", "NÜFUS", "KONUMA GİT"]]
+                .groupby(["İLÇE", "MAHALLE", "KONUMA GİT"], as_index=False)
+                .sum()
             )
-            cols_to_export = ["İLÇE", "MAHALLE", "YIL", "NÜFUS", "KONUMA GİT"]
-            if all(col in df_export_mahalle_ham.columns for col in cols_to_export):
-                 df_export_mahalle_ham = df_export_mahalle_ham[cols_to_export]
-            else:
-                 st.warning("Ham mahalle verisi için gerekli sütunlar bulunamadı.")
-                 df_export_mahalle_ham = pd.DataFrame(columns=cols_to_export)
+        else:
+            # Boş bir şablon oluştur
+            pivot_df_mahalle = pd.DataFrame(columns=["İLÇE", "MAHALLE", "NÜFUS", "KONUMA GİT"])
 
+        # YIL sütununu ekle (Genel Toplam’da boş bırakacağız)
+        pivot_df_mahalle["YIL"] = secili_yil_mahalle
 
-            if not df_export_mahalle_ham.empty:
-                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-                    sheet_name = "Ham Mahalle Verisi"
-                    df_export_mahalle_ham.to_excel(writer, sheet_name=sheet_name, index=False)
-                    ws = writer.sheets[sheet_name]
-                    if "KONUMA GİT" in df_export_mahalle_ham.columns:
-                        link_col = df_export_mahalle_ham.columns.get_loc("KONUMA GİT")
-                        # Link sütununda sadece geçerli URL'leri yazdır
-                        for idx, url in enumerate(df_export_mahalle_ham["KONUMA GİT"], start=1):
-                            if url and isinstance(url, str) and url.startswith("http"):
-                                ws.write_url(idx, link_col, url, string="Git")
+        # Genel Toplam satırı
+        totals = pivot_df_mahalle.select_dtypes(include="number").sum().to_dict()
+        totals["İLÇE"]      = "Genel Toplam"
+        totals["MAHALLE"]   = ""
+        totals["YIL"]       = ""      # boş bırak
+        totals["KONUMA GİT"] = ""
+        pivot_df_mahalle = pd.concat([pivot_df_mahalle, pd.DataFrame([totals])], ignore_index=True)
 
-                st.download_button(
-                    "Ham Veriyi İndir",
-                    data=output.getvalue(),
-                    file_name=f"mahalle_ham_veri_{secili_yil_mahalle}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    type="secondary"
-                )
-            else:
-                st.warning("İndirilecek ham mahalle verisi bulunamadı.")
+        # Sütun sırasını kesinleştir
+        cols = ["İLÇE", "MAHALLE", "YIL", "NÜFUS", "KONUMA GİT"]
+        pivot_df_mahalle = pivot_df_mahalle.reindex(columns=cols)
 
-        # Pivot tablo indir
-        with col_excel2:
-            pivot_output = BytesIO()
-            # Pivot tablo için filtrelenmiş df_mahalle verisini kullan
-            df_piv_source_mahalle = df_mahalle_filtered.copy()
+        # --- EXCEL’E YAZ VE 'KONUMA GİT' LİNKİNİ "Git" METNİYLE EKLE ---
+        with pd.ExcelWriter(pivot_output, engine="xlsxwriter") as writer:
+            sheet_name = "Pivot Mahalle"
+            pivot_df_mahalle.to_excel(writer, sheet_name=sheet_name, index=False)
+            ws = writer.sheets[sheet_name]
 
-            if not df_piv_source_mahalle.empty:
-                # Nüfus sütunu mevcut ve sayısal ise pivot oluştur
-                if "NÜFUS" in df_piv_source_mahalle.columns and pd.api.types.is_numeric_dtype(df_piv_source_mahalle["NÜFUS"]):
-                    # Düzeltilmiş Pivot Mantığı: Sadece İLÇE ve MAHALLE'ye göre grupla
-                    pivot_df_mahalle = (
-                        df_piv_source_mahalle[["İLÇE", "MAHALLE", "NÜFUS"]]
-                        .groupby(["İLÇE", "MAHALLE"])
-                        .sum() # Mahalle düzeyinde zaten toplam olduğu için sum etkisiz kalır ama kod standardı
-                        .reset_index()
-                    )
+            link_col_idx = pivot_df_mahalle.columns.get_loc("KONUMA GİT")
+            for row_idx, url in enumerate(pivot_df_mahalle["KONUMA GİT"], start=1):
+                if isinstance(url, str) and url.startswith("http"):
+                    ws.write_url(row_idx, link_col_idx, url, string="Git")
 
-                    # YIL sütununu pivot tablo oluştuktan sonra ekle
-                    pivot_df_mahalle["YIL"] = secili_yil_mahalle # secili_yil_mahalle zaten ilgili yıl stringi
+        # --- BUTONU HER ZAMAN GÖSTER ---
+        st.download_button(
+            "Pivot Tabloyu İndir",
+            data=pivot_output.getvalue(),
+            file_name=f"mahalle_pivot_{secili_yil_mahalle}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary",
+            key="pivot_mahalle_download"
+        )
 
-                    # Genel Toplam satırı
-                    totals = pivot_df_mahalle.select_dtypes(include=[int, float]).sum().to_frame().T
-                    totals["İLÇE"] = "Genel Toplam"
-                    totals["MAHALLE"] = ""
-                    # YIL sütunu toplamda NaN olacağından, Genel Toplam satırına selected_yil_mahalle'yi atayalım
-                    totals["YIL"] = secili_yil_mahalle
-                    pivot_df_mahalle = pd.concat([pivot_df_mahalle, totals], ignore_index=True)
-
-                    # Eğer ham veri export'u başarısız olursa bu kısım çalışmayabilir.
-                    if 'df_export_mahalle_ham' in locals() and "KONUMA GİT" in df_export_mahalle_ham.columns:
-                         coord_map = df_export_mahalle_ham.set_index(["İLÇE", "MAHALLE"])["KONUMA GİT"]
-                         pivot_df_mahalle["KONUMA GİT"] = pivot_df_mahalle.apply(
-                             lambda row: coord_map.get((row["İLÇE"], row["MAHALLE"]), ""),
-                             axis=1
-                         )
-                    else:
-                         pivot_df_mahalle["KONUMA GİT"] = "" # KONUMA GİT sütunu yoksa boş ekle
-
-
-                else:
-                     st.warning("Pivot tablo oluşturmak için uygun nüfus verisi veya sütunlar bulunamadı.")
-                     pivot_df_mahalle = pd.DataFrame(columns=["İLÇE", "MAHALLE", "YIL", "KONUMA GİT"]) # Boş DataFrame oluştur
-
-            else:
-                st.warning("Pivot tablo oluşturmak için mahalle verisi bulunamadı.")
-                pivot_df_mahalle = pd.DataFrame(columns=["İLÇE", "MAHALLE", "YIL", "KONUMA GİT"]) # Boş DataFrame oluştur
-
-
-            if not pivot_df_mahalle.empty:
-                with pd.ExcelWriter(pivot_output, engine="xlsxwriter") as writer:
-                    sheet_name = "Pivot Mahalle"
-                    pivot_df_mahalle.to_excel(writer, sheet_name=sheet_name, index=False)
-                    ws = writer.sheets[sheet_name]
-
-                    if "KONUMA GİT" in pivot_df_mahalle.columns:
-                         git_col = pivot_df_mahalle.columns.get_loc("KONUMA GİT")
-                         # Link sütununda sadece geçerli URL'leri yazdır
-                         for idx, url in enumerate(pivot_df_mahalle["KONUMA GİT"], start=1):
-                              if url and isinstance(url, str) and url.startswith("http"):
-                                   ws.write_url(idx, git_col, url, string="Git")
-
-
-                st.download_button(
-                    "Pivot Tabloyu İndir",
-                    data=pivot_output.getvalue(),
-                    file_name=f"mahalle_pivot_{secili_yil_mahalle}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    type="primary"
-                )
-            else:
-                 st.warning("İndirilecek pivot mahalle verisi bulunamadı.")
-    else:
-        st.info("Mahalle verisi yüklenemediği için bu bölüm gösterilemiyor.")
+        # Eğer sadece başlık + Genel Toplam kaldıysa bilgi ver
+        if pivot_df_mahalle.shape[0] <= 1:
+            st.info("Seçiminize uygun mahalle verisi bulunamadığından pivot tablo yalnızca başlıkları içeriyor.")
 
 
 
@@ -773,7 +772,7 @@ st.markdown("### 👥 Demografi Haritası (% Yaş Dağılımı)") # Bölüm baş
 # --- Demografi Haritası Kodları (Pydeck) ---
 
 # use_container_width=True kaldırıldı
-selected_label_map = st.selectbox("Harita Rengi için Yaş Grubu Yüzdesi Seçiniz", pct_labels, key="demography_pct_map")
+selected_label_map = st.selectbox("Yaş Grubu Seçiniz", pct_labels, key="demography_pct_map")
 selected_pct_original = label_to_col.get(selected_label_map)
 if not selected_pct_original:
     st.error("Lütfen listeden bir yaş grubu seçin.")
@@ -1008,24 +1007,16 @@ else: # df_demo_filtered is empty (from initial load or filter result)
      st.warning("Harita için veri bulunamadı (Demografi).")
 
 
-# --- Yaş Dağılım Grafikleri (İki Aşamalı Seçim ve Butonla Gösterim - Yeni Layout) ---
-# Bu bölüm demografi haritası ve onun indirme butonlarından sonra geliyor.
-if "last_mahalle_list" not in st.session_state:
-    st.session_state.last_mahalle_list = []
-
-st.markdown("---") # Ayırıcı çizgi
+# Uyarı: Karşılaştırmak istediğiniz mahalleleri seçin
+st.markdown("---")  # Ayırıcı çizgi
 st.markdown("### 📊 Seçilen Mahallelerin Yaş Dağılım Grafikleri")
+# Bilgilendirme metnini öne çıkarmak için renk ve kalın yazı stili:
 st.markdown("*Karşılaştırma Yapmak İstediğiniz Mahalleleri Seçin.*")
-
 
 # -----------------------------
 # 1) Sabit Tanımlar ve Veri Yükleme
 # -----------------------------
 age_group_order = ["0-5", "6-13", "14-17", "18-34", "35-64", "65+"]
-
-@st.cache_data(show_spinner=False)
-def get_demo_data():
-    return load_all_age_demographics()
 
 demo_df = get_demo_data()
 
@@ -1035,6 +1026,7 @@ pct_labels  = [c.replace(" YAŞ YÜZDE", "") for c in pct_columns]
 label_to_col = dict(zip(pct_labels, pct_columns))
 all_ilces_list = sorted(demo_df["İLÇE"].unique())
 
+@st.cache_data
 def build_chart(mahalle: str, show_suffix: bool = True) -> alt.Chart:
     df = pd.DataFrame([
         {"Yaş Grubu": lbl,
@@ -1043,7 +1035,7 @@ def build_chart(mahalle: str, show_suffix: bool = True) -> alt.Chart:
         for lbl in age_group_order
     ])
     ilce = demo_df.loc[demo_df["MAHALLE"] == mahalle, "İLÇE"].iloc[0]
-    # Determine axis labelExpr based on show_suffix
+    # Eksende gösterilecek etiket biçimini ayarlıyoruz: suffix gösterimi
     label_expr = "datum.value + ' Yaş'" if show_suffix else "datum.value"
     bar = alt.Chart(df).mark_bar().encode(
         x=alt.X(
@@ -1076,7 +1068,7 @@ def build_chart(mahalle: str, show_suffix: bool = True) -> alt.Chart:
 col1, col2 = st.columns([2, 2])
 with col1:
     selected_ilces = st.multiselect(
-        "İlçe:",
+        "İlçeler:",
         all_ilces_list,
         placeholder="Lütfen bir ya da daha fazla ilçe seçin"
     )
@@ -1085,51 +1077,64 @@ with col2:
         demo_df[demo_df["İLÇE"].isin(selected_ilces)]["MAHALLE"].unique()
     ) if selected_ilces else []
     selected_mahalles = st.multiselect(
-        "Mahalle:",
+        "Mahalleler:",
         available_mahalles,
         placeholder="Lütfen bir ya da daha fazla mahalle seçin"
     )
 
+# -----------------------------
+# Bu blok, `last_ilce_list` ve `last_mahalle_list` session state’lerini karşılaştırarak
+# seçimler değiştiğinde `show_charts` bayrağını sıfırlıyor. Böylece kullanıcı seçimleri
+# güncellediğinde grafikler gizlenecek ve buton tekrar görünür olacak.
+# -----------------------------
+if 'last_ilce_list' not in st.session_state:
+    st.session_state.last_ilce_list = []
+if 'last_mahalle_list' not in st.session_state:
+    st.session_state.last_mahalle_list = []
+# Seçimler değiştiyse grafik gösterimini kapat
+if selected_ilces != st.session_state.last_ilce_list or selected_mahalles != st.session_state.last_mahalle_list:
+    st.session_state.show_charts = False
+# Son seçimleri sakla
+st.session_state.last_ilce_list = selected_ilces.copy() if isinstance(selected_ilces, list) else []
 
 # -----------------------------
 # 3) Form: Dinamik Buton ile Grafik Göster/Güncelleme
 # -----------------------------
-# Buton etiketini ilk çalışmada "Grafiği Göster", sonrasında "Grafiği Güncelle" yap
+if not st.session_state.get('show_charts', False):
+    first_time = not st.session_state.last_mahalle_list
+    button_label = "Grafiği Göster" if first_time else "Grafiği Güncelle"
+    with st.form("grafik_form"):
+        btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2, 0.5, 2, 0.5])
+        with btn_col4:
+            show = st.form_submit_button(
+                button_label,
+                type="primary",
+                use_container_width=True
+            )
+    if show:
+        st.session_state.show_charts = True
+        st.session_state.last_mahalle_list = selected_mahalles.copy()
+    else:
+        st.info("Grafiğini görmek istediğiniz ilçe ve mahalleleri seçtikten sonra 'Grafiği Göster' veya 'Grafiği Güncelle' butonuna basınız.")
+        st.stop()
 
-first_time = not st.session_state.last_mahalle_list
-
-button_label = "Grafiği Göster" if first_time else "Grafiği Güncelle"
-with st.form("grafik_form"):
-    # 4 sütun: boş, boş, boş, buton için yer
-    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([2, 0.5, 2, 0.5])
-    with btn_col4:
-        show = st.form_submit_button(
-            button_label,
-            type="primary",
-            use_container_width=True
-        )
-
-# Form gönderilmediyse kullanıcı uyar ve işlem yapma
-if not show:
-    st.info("Grafiğini görmek istediğiniz ilçe ve mahalleleri seçtikten sonra 'Grafiği Göster/Güncelle' butonuna basınız.")
-    st.stop()
-
-# Butona basıldığında en son seçilen mahalle listesini kaydet
-if show:
-    st.session_state.last_mahalle_list = selected_mahalles.copy()
 # -----------------------------
 # 4) Grafik Gösterim
 # -----------------------------
-if not selected_ilces:
-    st.warning("Lütfen önce bir ilçe seçin.")
-elif not selected_mahalles:
-    st.warning("Lütfen en az bir mahalle seçin.")
+if st.session_state.get('show_charts', False):
+    if not selected_ilces:
+        st.warning("Lütfen önce bir ilçe seçin.")
+    elif not selected_mahalles:
+        st.warning("Lütfen en az bir mahalle seçin.")
+    else:
+        for i in range(0, len(selected_mahalles), 5):
+            row_mahalle = selected_mahalles[i : i + 5]
+            cols = st.columns(len(row_mahalle))
+            hide_suffix = len(row_mahalle) > 4
+            for idx, m in enumerate(row_mahalle):
+                with cols[idx]:
+                    chart = build_chart(m, show_suffix=not hide_suffix)
+                    st.altair_chart(chart, use_container_width=True)
 else:
-    for i in range(0, len(selected_mahalles), 5):
-        row_mahalle = selected_mahalles[i : i + 5]
-        cols = st.columns(len(row_mahalle))
-        hide_suffix = len(row_mahalle) > 4
-        for idx, m in enumerate(row_mahalle):
-            with cols[idx]:
-                chart = build_chart(m, show_suffix=not hide_suffix)
-                st.altair_chart(chart, use_container_width=True)
+    # Grafiklar gizliyken butonun görünmesi için placeholder boş bırak
+    pass
