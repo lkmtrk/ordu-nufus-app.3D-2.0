@@ -301,27 +301,31 @@ mahalle_lookup  = build_geo_lookup(mahalle_geojson, "KOD")
 # 1. ORDU İLİ NÜFUS ANALİZİ 
 # -------------------------------
 
-# ──────────── 4) PIVOT TO LONG ────────────
-year_cols = [c for c in df_full.columns if c.strip().startswith("20") and "YILI NÜFUSU" in c]
-df_long = pd.melt(
-    df_full,
-    id_vars=["İLÇE", "MAHALLE"],
-    value_vars=year_cols,
-    var_name="YIL",
-    value_name="NÜFUS (KİŞİ SAYISI)"
-)
-df_long["YIL"] = df_long["YIL"].str.extract(r"(20\d{2})")
-df_long["NÜFUS (KİŞİ SAYISI)"] = pd.to_numeric(df_long["NÜFUS (KİŞİ SAYISI)"], errors="coerce")
-years = sorted(df_long["YIL"].dropna().unique().tolist())
+@st.cache_data
+def get_long_df(df_full: pd.DataFrame) -> pd.DataFrame:
+    year_cols = [c for c in df_full.columns if c.strip().startswith("20") and "YILI NÜFUSU" in c]
+    df_long = pd.melt(
+        df_full,
+        id_vars=["İLÇE", "MAHALLE"],
+        value_vars=year_cols,
+        var_name="YIL",
+        value_name="NÜFUS (KİŞİ SAYISI)"
+    )
+    df_long["YIL"] = df_long["YIL"].str.extract(r"(20\d{2})")
+    df_long["NÜFUS (KİŞİ SAYISI)"] = pd.to_numeric(df_long["NÜFUS (KİŞİ SAYISI)"], errors="coerce")
+    return df_long
+
+# -------------------------------
+
+df_long = get_long_df(df_full)
+years   = sorted(df_long["YIL"].dropna().unique().tolist())
 
 # ──────────── 5) SELECTIONS & FIRST CHART ────────────
 
-st.markdown("### 📈Ordu İli Nüfus Nüfus Analizi")
+st.markdown("### 📈Ordu İli Nüfus Analizi")
 
-# Orta bloğu 3 kolonlu dış düzenle sarıyoruz (1-2-1)
 outer1, outer2, outer3 = st.columns([1, 2, 1])
 with outer2:
-    # içte 2 kolon: biri Başlangıç, diğeri Bitiş
     col1, col2 = st.columns(2)
     start_year = col1.selectbox("Başlangıç Yılı", years, index=0)
     end_year   = col2.selectbox("Bitiş Yılı",     years, index=len(years)-1)
@@ -329,23 +333,25 @@ with outer2:
     if start_year > end_year:
         st.warning("Başlangıç yılı, bitiş yılından büyük olamaz!")
     else:
-        df_filtered = df_long[(df_long["YIL"] >= start_year) & (df_long["YIL"] <= end_year)]
+        df_filtered = df_long[
+            (df_long["YIL"] >= start_year) & (df_long["YIL"] <= end_year)
+        ]
 
         st.markdown(
-        f"<h4 style='font-size:22px; margin-bottom: 8px;'>📈 Genel Nüfus Değişimi ({start_year} - {end_year})</h4>",
-        unsafe_allow_html=True
+            f"<h4 style='font-size:22px; margin-bottom: 8px;'>"
+            f"📈 Genel Nüfus Değişimi ({start_year} - {end_year})"
+            f"</h4>",
+            unsafe_allow_html=True
         )
         ordu_geneli = (
             df_filtered
-            .groupby("YIL")["NÜFUS (KİŞİ SAYISI)"]
+            .groupby("YIL", as_index=False)["NÜFUS (KİŞİ SAYISI)"]
             .sum()
-            .reset_index()
         )
         st.plotly_chart(
             px.line(ordu_geneli, x="YIL", y="NÜFUS (KİŞİ SAYISI)", markers=True),
             key="chart_ordu"
         )
-
 
 
 # -------------------------------
@@ -649,7 +655,13 @@ if secili_yil_mahalle:
 
     # 7) Formatlama & renk — vektörize
     if not df_mahalle_filtered.empty:
-        df_mahalle_filtered["NÜFUS_FMT"] = (df_mahalle_filtered["NÜFUS"].astype(int).map("{:,.0f}".format).str.replace(",", "."))
+        # 1) NaN değerleri 0 ile doldur
+        df_mahalle_filtered["NÜFUS_CLEAN"] = df_mahalle_filtered["NÜFUS"].fillna(0)
+        # 2) Integer'a çevir ve noktalı string formatına dönüştür
+        df_mahalle_filtered["NÜFUS_FMT"] = (df_mahalle_filtered["NÜFUS_CLEAN"].astype(int).map("{:,.0f}".format).str.replace(",", "."))
+        # (isteğe bağlı) Temizlik sütununu silebilirsiniz
+        df_mahalle_filtered.drop(columns=["NÜFUS_CLEAN"], inplace=True)
+
 
         # Mahalle için kategorilere ayırma ve renk atama
         bins_m = [-float("inf"), 5000, 10000, 15000, 20000, 25000, 30000, float("inf")]
@@ -874,9 +886,7 @@ with outer2:
 if "secili_mahalleler" not in st.session_state:
     st.session_state.secili_mahalleler = []
 
-# … önceki bloklar …
 
-# ► İlçe seçiminden hemen sonra …
 # secili_ilce tanımlı olduğuna emin olun
 
 # ► Mahalle seçim ve grafik bloğu
@@ -903,7 +913,7 @@ with outer2:
        placeholder="Bir veya birden fazla mahalle seçin"
     )
 
-    st.info(f"🟢 Seçili mahalle sayısı: {len(secili_mahalleler)}")
+    st.info(f"🟢 Seçili Mahalle Sayısı: {len(secili_mahalleler)}")
 
     # Seçilen mahallelerin grafiği + indirme
     if secili_mahalleler:
@@ -920,36 +930,37 @@ with outer2:
             ),
             key="chart_selected_mahalle"
         )
-
-        # Ham veri indir
-        ham_out = BytesIO()
-        df_sel.to_excel(ham_out, index=False)
-        st.download_button(
-            "Ham Veri İndir",
-            type="secondary",
-            data=ham_out.getvalue(),
-            file_name=f"{secili_ilce}_mahalle_ham.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        # Pivot tablo indir
-        pivot = df_sel.pivot_table(
-            index="MAHALLE",
-            columns="YIL",
-            values="NÜFUS (KİŞİ SAYISI)",
-            aggfunc="sum"
-        )
-        pivot.loc["TOPLAM"] = pivot.sum(numeric_only=True)
-        pivot.reset_index(inplace=True)
-        piv_out = BytesIO()
-        pivot.to_excel(piv_out, index=False)
-        st.download_button(
-            "Pivot Tablo İndir",
-            type="primary",
-            data=piv_out.getvalue(),
-            file_name=f"{secili_ilce}_mahalle_pivot.xlsx",
-            mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet"
-        )
+        btn_col1, btn_col2 = st.columns([1, 1], gap="small")
+        with btn_col1:
+            # Ham veri indir
+            ham_out = BytesIO()
+            df_sel.to_excel(ham_out, index=False)
+            st.download_button(
+                "Ham Veriyi İndir",
+                type="secondary",
+                data=ham_out.getvalue(),
+                file_name=f"{secili_ilce}_mahalle_ham.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        with btn_col2:
+            # Pivot tablo indir
+            pivot = df_sel.pivot_table(
+                index="MAHALLE",
+                columns="YIL",
+                values="NÜFUS (KİŞİ SAYISI)",
+                aggfunc="sum"
+            )
+            pivot.loc["TOPLAM"] = pivot.sum(numeric_only=True)
+            pivot.reset_index(inplace=True)
+            piv_out = BytesIO()
+            pivot.to_excel(piv_out, index=False)
+            st.download_button(
+                "Pivot Tablo İndir",
+                type="primary",
+                data=piv_out.getvalue(),
+                file_name=f"{secili_ilce}_mahalle_pivot.xlsx",
+                mime="application/vnd.openxmlformats-officedocument-spreadsheetml.sheet"
+            )
 
 
 
